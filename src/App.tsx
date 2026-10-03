@@ -459,8 +459,158 @@ function MapHints({ activePanel, routeFrom, routeTo, activeEndpoint }: MapHintsP
   );
 }
 
+// ── Live location marker helpers ──────────────────────────────────────────────
+
+/** Injects the pulse keyframe once into the document head. */
+function ensurePulseStyle() {
+  if (document.getElementById('ist-pulse-style')) return;
+  const s = document.createElement('style');
+  s.id = 'ist-pulse-style';
+  s.textContent = `
+    @keyframes ist-pulse {
+      0%   { transform: scale(1);   opacity: 0.55; }
+      70%  { transform: scale(2.6); opacity: 0;    }
+      100% { transform: scale(2.6); opacity: 0;    }
+    }
+    .ist-location-pulse {
+      animation: ist-pulse 2s ease-out infinite;
+    }
+  `;
+  document.head.appendChild(s);
+}
+
+function createLocationIcon(): L.DivIcon {
+  ensurePulseStyle();
+  return L.divIcon({
+    className: '',
+    iconAnchor: [12, 12],
+    iconSize:   [24, 24],
+    html: `
+      <div style="position:relative;width:24px;height:24px;">
+        <!-- pulse ring -->
+        <div class="ist-location-pulse" style="
+          position:absolute;inset:0;border-radius:50%;
+          background:rgba(45,212,191,0.35);
+        "></div>
+        <!-- white halo -->
+        <div style="
+          position:absolute;inset:2px;border-radius:50%;
+          background:#fff;
+          box-shadow:0 0 0 1.5px rgba(45,212,191,0.6), 0 2px 8px rgba(0,0,0,0.55);
+        "></div>
+        <!-- teal dot -->
+        <div style="
+          position:absolute;inset:5px;border-radius:50%;
+          background:#2dd4bf;
+        "></div>
+      </div>`,
+  });
+}
+
+// ── ZoomControls + live location ──────────────────────────────────────────────
+
 function ZoomControls({ map }: { map: MapView }) {
   const leafletMap = map.getMap();
+
+  // tracking state
+  const [tracking, setTracking]   = React.useState(false);
+  const [hasError, setHasError]   = React.useState(false);
+  const watchIdRef                = React.useRef<number | null>(null);
+  const locationMarkerRef         = React.useRef<L.Marker | null>(null);
+  const accuracyCircleRef         = React.useRef<L.Circle | null>(null);
+  const hasFlewRef                = React.useRef(false);   // fly only on first fix
+
+  // Clean up marker + circle helpers
+  const clearLocationLayers = React.useCallback(() => {
+    locationMarkerRef.current?.remove();
+    locationMarkerRef.current = null;
+    accuracyCircleRef.current?.remove();
+    accuracyCircleRef.current = null;
+  }, []);
+
+  // Stop watching GPS
+  const stopTracking = React.useCallback(() => {
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+    clearLocationLayers();
+    hasFlewRef.current = false;
+    setTracking(false);
+    setHasError(false);
+  }, [clearLocationLayers]);
+
+  // Start/update GPS watch
+  const startTracking = React.useCallback(() => {
+    if (!leafletMap) return;
+    if (!navigator.geolocation) {
+      setHasError(true);
+      return;
+    }
+
+    setHasError(false);
+    setTracking(true);
+    hasFlewRef.current = false;
+
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (pos) => {
+        const { latitude: lat, longitude: lng, accuracy } = pos.coords;
+        const latlng: L.LatLngExpression = [lat, lng];
+
+        // Fly to location on first fix only
+        if (!hasFlewRef.current) {
+          leafletMap.flyTo(latlng, Math.min(leafletMap.getZoom(), 16), {
+            duration: 1, easeLinearity: 0.4,
+          });
+          hasFlewRef.current = true;
+        }
+
+        // Update or create marker
+        if (locationMarkerRef.current) {
+          locationMarkerRef.current.setLatLng(latlng);
+        } else {
+          locationMarkerRef.current = L.marker(latlng, {
+            icon: createLocationIcon(),
+            zIndexOffset: 2000,
+            interactive: false,
+          }).addTo(leafletMap);
+        }
+
+        // Update or create accuracy ring
+        if (accuracyCircleRef.current) {
+          accuracyCircleRef.current.setLatLng(latlng);
+          accuracyCircleRef.current.setRadius(accuracy);
+        } else {
+          accuracyCircleRef.current = L.circle(latlng, {
+            radius: accuracy,
+            color:       '#2dd4bf',
+            fillColor:   '#2dd4bf',
+            fillOpacity: 0.07,
+            weight:      1.5,
+            opacity:     0.35,
+            interactive: false,
+          }).addTo(leafletMap);
+        }
+      },
+      (_err) => {
+        setHasError(true);
+        setTracking(false);
+        clearLocationLayers();
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 2000 },
+    );
+  }, [leafletMap, clearLocationLayers]);
+
+  // Toggle
+  const handleLocate = React.useCallback(() => {
+    if (tracking) stopTracking();
+    else          startTracking();
+  }, [tracking, startTracking, stopTracking]);
+
+  // Cleanup on unmount
+  React.useEffect(() => () => stopTracking(), [stopTracking]);
+
+  // ── render ──────────────────────────────────────────────────────────────────
   const btnStyle: React.CSSProperties = {
     width: '36px', height: '36px',
     background:  'rgba(11,12,16,0.92)',
@@ -473,7 +623,24 @@ function ZoomControls({ map }: { map: MapView }) {
     cursor:      'pointer',
     backdropFilter: 'blur(8px)',
     boxShadow:   '0 2px 12px rgba(0,0,0,0.5)',
-    transition:  'background 0.15s, border-color 0.15s',
+    transition:  'background 0.15s, border-color 0.15s, color 0.15s',
+  };
+
+  const locateBtnStyle: React.CSSProperties = {
+    ...btnStyle,
+    marginTop: '4px',
+    // Active state: teal border + tinted background + teal icon
+    ...(tracking ? {
+      border:     '1px solid rgba(45,212,191,0.55)',
+      background: 'rgba(45,212,191,0.10)',
+      color:      '#2dd4bf',
+      boxShadow:  '0 0 0 1px rgba(45,212,191,0.2), 0 2px 12px rgba(0,0,0,0.5)',
+    } : {}),
+    ...(hasError ? {
+      border:     '1px solid rgba(244,63,94,0.45)',
+      background: 'rgba(244,63,94,0.08)',
+      color:      '#f43f5e',
+    } : {}),
   };
 
   return (
@@ -488,11 +655,11 @@ function ZoomControls({ map }: { map: MapView }) {
         onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(11,12,16,0.92)')}>
         <IconZoomOut size={16} />
       </button>
-      <button style={{ ...btnStyle, marginTop: '4px' }}
-        onClick={() => leafletMap?.locate({ setView: true, maxZoom: 16 })}
-        title="My location"
-        onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(233,228,218,0.1)')}
-        onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(11,12,16,0.92)')}>
+      <button
+        style={locateBtnStyle}
+        onClick={handleLocate}
+        title={tracking ? 'Stop tracking location' : hasError ? 'Location unavailable' : 'Track my location'}
+      >
         <IconLocate size={15} />
       </button>
     </div>
