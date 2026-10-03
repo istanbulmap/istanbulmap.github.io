@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { FavoriteLocation, LocationCategory, LatLng } from '../../types';
 import { AppActions, AppState } from '../../hooks/useAppStore';
 import {
-  IconStar, IconTrash, IconArrowRight, IconChevronDown, IconChevronRight, IconPlus,
+  IconStar, IconTrash, IconArrowRight, IconChevronDown, IconChevronRight, IconPlus, IconX, IconCheck,
   CATEGORY_ICONS,
 } from '../ui/Icons';
 
@@ -29,6 +29,22 @@ const LANDMARKS: { name: string; position: LatLng; category: LocationCategory }[
   { name: 'Suleymaniye Mosque',    position: { lat: 41.0161, lng: 28.9639 }, category: 'attraction' },
   { name: 'Istanbul Airport',      position: { lat: 41.2753, lng: 28.7519 }, category: 'transport'  },
   { name: 'Sabiha Gokcen Airport', position: { lat: 40.8982, lng: 29.3093 }, category: 'transport'  },
+  // Restaurants
+  { name: 'Nusr-Et Steakhouse Etiler', position: { lat: 41.0746, lng: 29.0322 }, category: 'restaurant' },
+  { name: 'Mikla Restaurant',          position: { lat: 41.0317, lng: 28.9778 }, category: 'restaurant' },
+  { name: 'Çiya Sofrası (Kadıköy)',    position: { lat: 40.9892, lng: 29.0260 }, category: 'restaurant' },
+  { name: 'Karaköy Güllüoğlu',        position: { lat: 41.0223, lng: 28.9737 }, category: 'restaurant' },
+  { name: 'Hamdi Restaurant',          position: { lat: 41.0172, lng: 28.9714 }, category: 'restaurant' },
+  // Cafes
+  { name: 'Mandabatmaz (Taksim)',      position: { lat: 41.0342, lng: 28.9789 }, category: 'cafe' },
+  { name: 'Walter\'s Coffee Roastery', position: { lat: 41.0432, lng: 29.0088 }, category: 'cafe' },
+  { name: 'Kronotrop Coffee Bar',      position: { lat: 41.0317, lng: 28.9820 }, category: 'cafe' },
+  { name: 'Fazıl Bey (Kadıköy)',       position: { lat: 40.9903, lng: 29.0281 }, category: 'cafe' },
+  // Hotels
+  { name: 'Four Seasons Sultanahmet',  position: { lat: 41.0072, lng: 28.9784 }, category: 'hotel' },
+  { name: 'Çırağan Palace Kempinski', position: { lat: 41.0455, lng: 29.0017 }, category: 'hotel' },
+  { name: 'Raffles Istanbul',          position: { lat: 41.0453, lng: 29.0116 }, category: 'hotel' },
+  { name: 'The Marmara Taksim',        position: { lat: 41.0369, lng: 28.9850 }, category: 'hotel' },
 ];
 
 const border = '1px solid rgba(233,228,218,0.10)';
@@ -36,15 +52,25 @@ const labelStyle: React.CSSProperties = {
   fontFamily: "'JetBrains Mono',monospace", fontSize: '10px',
   letterSpacing: '0.15em', textTransform: 'uppercase' as const, color: '#6d727b',
 };
+const inputStyle: React.CSSProperties = {
+  width: '100%', background: 'rgba(5,5,6,0.8)',
+  border: '1px solid rgba(233,228,218,0.18)', borderRadius: '8px',
+  padding: '6px 10px', fontSize: '13px', color: '#e9e4da',
+  outline: 'none', fontFamily: "'Space Grotesk',sans-serif",
+};
 
 interface FavoritesPanelProps {
   state: Pick<AppState, 'data'>;
   actions: Pick<AppActions, 'addFavorite' | 'deleteFavorite' | 'setMapCenter' | 'setMapZoom'>;
+  mapCenter: LatLng;
 }
 
-const FavoritesPanelComponent: React.FC<FavoritesPanelProps> = ({ state, actions }) => {
+const FavoritesPanelComponent: React.FC<FavoritesPanelProps> = ({ state, actions, mapCenter }) => {
   const [activeCategory, setActiveCategory] = useState<LocationCategory | 'all'>('all');
-  const [showLandmarks, setShowLandmarks] = useState(false);
+  const [showLandmarks, setShowLandmarks]   = useState(false);
+  const [showAddForm, setShowAddForm]       = useState(false);
+  const [addName, setAddName]               = useState('');
+  const [addCategory, setAddCategory]       = useState<LocationCategory>('restaurant');
 
   const favorites = state.data.favoriteLocations.filter(
     (f) => activeCategory === 'all' || f.category === activeCategory
@@ -55,8 +81,19 @@ const FavoritesPanelComponent: React.FC<FavoritesPanelProps> = ({ state, actions
     actions.setMapZoom(16);
   };
 
+  const handleAddCustom = () => {
+    if (!addName.trim()) return;
+    actions.addFavorite(addName.trim(), mapCenter, addCategory, '');
+    setAddName('');
+    setShowAddForm(false);
+  };
+
   const fmt = (iso: string) =>
     new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+  const categoryLabel = activeCategory === 'all'
+    ? 'favorites'
+    : CATEGORIES.find((c) => c.id === activeCategory)?.label.toLowerCase() ?? 'favorites';
 
   const tabBtn = (active: boolean, onClick: () => void, children: React.ReactNode) => (
     <button onClick={onClick}
@@ -73,6 +110,7 @@ const FavoritesPanelComponent: React.FC<FavoritesPanelProps> = ({ state, actions
 
   return (
     <div className="flex flex-col h-full min-h-0">
+      {/* Category filter */}
       <div className="p-4 flex-shrink-0" style={{ borderBottom: border }}>
         <div className="flex items-center justify-between mb-3">
           <p style={labelStyle}>Favorites</p>
@@ -92,54 +130,129 @@ const FavoritesPanelComponent: React.FC<FavoritesPanelProps> = ({ state, actions
       </div>
 
       <div className="flex-1 overflow-y-auto min-h-0">
+
+        {/* Add current map location */}
+        <div className="p-3" style={{ borderBottom: '1px solid rgba(233,228,218,0.06)' }}>
+          {showAddForm ? (
+            <div className="space-y-2">
+              <p style={{ ...labelStyle, marginBottom: '6px' }}>Save current map location</p>
+              <input
+                type="text"
+                value={addName}
+                onChange={(e) => setAddName(e.target.value)}
+                placeholder="Place name..."
+                style={inputStyle}
+                autoFocus
+                onKeyDown={(e) => e.key === 'Enter' && handleAddCustom()}
+              />
+              {/* Category picker */}
+              <div className="flex gap-1.5 flex-wrap">
+                {CATEGORIES.map((cat) => {
+                  const CatIcon = CATEGORY_ICONS[cat.id];
+                  const isActive = addCategory === cat.id;
+                  return (
+                    <button key={cat.id} onClick={() => setAddCategory(cat.id)}
+                      className="flex items-center gap-1 text-xs px-2 py-1 rounded-full transition-all"
+                      style={{
+                        background: isActive ? 'rgba(233,228,218,0.12)' : 'transparent',
+                        color:      isActive ? '#e9e4da' : '#6d727b',
+                        border:     isActive ? '1px solid rgba(233,228,218,0.25)' : '1px solid rgba(233,228,218,0.08)',
+                        fontFamily: "'Space Grotesk',sans-serif",
+                      }}>
+                      <CatIcon size={10} /> {cat.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ fontSize: '10px', color: '#6d727b', fontFamily: "'JetBrains Mono',monospace" }}>
+                Location: {mapCenter.lat.toFixed(4)}, {mapCenter.lng.toFixed(4)}
+              </div>
+              <div className="flex gap-2">
+                <button onClick={handleAddCustom}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs"
+                  style={{ background: 'rgba(233,228,218,0.1)', color: '#e9e4da',
+                           border: '1px solid rgba(233,228,218,0.2)', fontFamily: "'Space Grotesk',sans-serif" }}>
+                  <IconCheck size={11} /> Save
+                </button>
+                <button onClick={() => { setShowAddForm(false); setAddName(''); }}
+                  className="flex items-center gap-1 text-xs" style={{ color: '#6d727b' }}>
+                  <IconX size={11} /> Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button onClick={() => setShowAddForm(true)}
+              className="w-full py-2 rounded-lg text-xs flex items-center justify-center gap-1.5 transition-colors"
+              style={{ border: '1px dashed rgba(233,228,218,0.15)', color: '#6d727b', fontFamily: "'Space Grotesk',sans-serif" }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = '#e9e4da')}
+              onMouseLeave={(e) => (e.currentTarget.style.color = '#6d727b')}>
+              <IconPlus size={13} /> Save current map location
+            </button>
+          )}
+        </div>
+
         {/* Quick-add landmarks */}
-        <div className="p-3 flex-shrink-0" style={{ borderBottom: '1px solid rgba(233,228,218,0.06)' }}>
+        <div className="p-3" style={{ borderBottom: '1px solid rgba(233,228,218,0.06)' }}>
           <button onClick={() => setShowLandmarks(!showLandmarks)}
-            className="flex items-center gap-2 transition-colors"
+            className="flex items-center gap-2 transition-colors w-full"
             style={{ fontSize: '11px', color: '#6d727b', fontFamily: "'JetBrains Mono',monospace", letterSpacing: '0.05em' }}
             onMouseEnter={(e) => (e.currentTarget.style.color = '#e9e4da')}
             onMouseLeave={(e) => (e.currentTarget.style.color = '#6d727b')}>
             {showLandmarks ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
-            Quick-add Istanbul Landmarks
+            Quick-add Istanbul Places
           </button>
 
           {showLandmarks && (
             <div className="mt-2 space-y-0.5">
-              {LANDMARKS.map((lm) => {
-                const alreadyAdded = state.data.favoriteLocations.some((f) => f.name === lm.name);
-                const CatIcon = CATEGORY_ICONS[lm.category];
-                return (
-                  <button key={lm.name}
-                    onClick={() => !alreadyAdded && actions.addFavorite(lm.name, lm.position, lm.category, '')}
-                    disabled={alreadyAdded}
-                    className="flex items-center gap-2 text-left px-2 py-1.5 rounded-lg w-full transition-colors"
-                    style={{
-                      color: alreadyAdded ? '#2b3038' : '#9a9d95',
-                      cursor: alreadyAdded ? 'default' : 'pointer',
-                      fontSize: '12px', fontFamily: "'Space Grotesk',sans-serif",
-                    }}
-                    onMouseEnter={(e) => { if (!alreadyAdded) e.currentTarget.style.background = 'rgba(233,228,218,0.04)'; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
-                    <CatIcon size={13} style={{ flexShrink: 0 }} />
-                    <span style={{ flex: 1 }}>{lm.name}</span>
-                    {alreadyAdded
-                      ? <span style={{ fontSize: '10px', color: '#2dd4bf', fontFamily: "'JetBrains Mono',monospace" }}>Added</span>
-                      : <IconPlus size={12} style={{ color: '#6d727b' }} />}
-                  </button>
-                );
-              })}
+              {/* Filter landmarks by active category if one is selected */}
+              {LANDMARKS
+                .filter((lm) => activeCategory === 'all' || lm.category === activeCategory)
+                .map((lm) => {
+                  const alreadyAdded = state.data.favoriteLocations.some((f) => f.name === lm.name);
+                  const CatIcon = CATEGORY_ICONS[lm.category];
+                  return (
+                    <button key={lm.name}
+                      onClick={() => !alreadyAdded && actions.addFavorite(lm.name, lm.position, lm.category, '')}
+                      disabled={alreadyAdded}
+                      className="flex items-center gap-2 text-left px-2 py-1.5 rounded-lg w-full transition-colors"
+                      style={{
+                        color:  alreadyAdded ? '#2b3038' : '#9a9d95',
+                        cursor: alreadyAdded ? 'default' : 'pointer',
+                        fontSize: '12px', fontFamily: "'Space Grotesk',sans-serif",
+                      }}
+                      onMouseEnter={(e) => { if (!alreadyAdded) e.currentTarget.style.background = 'rgba(233,228,218,0.04)'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
+                      <CatIcon size={13} style={{ flexShrink: 0, color: '#6d727b' }} />
+                      <span style={{ flex: 1 }}>{lm.name}</span>
+                      {alreadyAdded
+                        ? <span style={{ fontSize: '10px', color: '#2dd4bf', fontFamily: "'JetBrains Mono',monospace" }}>Added</span>
+                        : <IconPlus size={12} style={{ color: '#6d727b', flexShrink: 0 }} />}
+                    </button>
+                  );
+                })}
+              {LANDMARKS.filter((lm) => activeCategory === 'all' || lm.category === activeCategory).length === 0 && (
+                <p style={{ fontSize: '11px', color: '#2b3038', fontFamily: "'JetBrains Mono',monospace", padding: '8px 8px' }}>
+                  No preset {categoryLabel} locations — use Save current map location above.
+                </p>
+              )}
             </div>
           )}
         </div>
 
+        {/* Favorites list */}
         {favorites.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-40 p-6 text-center">
-            <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-3"
+          <div className="flex flex-col items-center justify-center p-6 text-center" style={{ minHeight: '140px' }}>
+            <div className="w-10 h-10 rounded-2xl flex items-center justify-center mb-3"
                  style={{ background: 'rgba(233,228,218,0.05)', color: '#2b3038' }}>
-              <IconStar size={22} />
+              <IconStar size={20} />
             </div>
-            <p style={{ fontSize: '13px', color: '#6d727b', fontFamily: "'Space Grotesk',sans-serif" }}>
-              No favorites yet. Use Quick-add above or right-click the map.
+            <p style={{ fontSize: '13px', color: '#6d727b', fontFamily: "'Space Grotesk',sans-serif", lineHeight: 1.6 }}>
+              No {categoryLabel} saved yet.
+              {activeCategory !== 'all' && (
+                <><br /><span style={{ fontSize: '11px', color: '#2b3038' }}>
+                  Use &ldquo;Save current map location&rdquo; above or add from Quick-add list.
+                </span></>
+              )}
             </p>
           </div>
         ) : (
@@ -156,7 +269,8 @@ const FavoritesPanelComponent: React.FC<FavoritesPanelProps> = ({ state, actions
                     <CatIcon size={17} />
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div className="text-sm font-medium truncate" style={{ color: '#e9e4da', fontFamily: "'Space Grotesk',sans-serif" }}>
+                    <div className="text-sm font-medium truncate"
+                         style={{ color: '#e9e4da', fontFamily: "'Space Grotesk',sans-serif" }}>
                       {fav.name}
                     </div>
                     <div style={{ fontSize: '10px', color: '#2b3038', fontFamily: "'JetBrains Mono',monospace", marginTop: '2px' }}>
@@ -164,10 +278,9 @@ const FavoritesPanelComponent: React.FC<FavoritesPanelProps> = ({ state, actions
                     </div>
                   </div>
                   <div className="flex gap-2 items-center">
-                    <button onClick={() => flyTo(fav)} style={{ color: '#6d727b' }}
+                    <button onClick={() => flyTo(fav)} style={{ color: '#6d727b' }} title="Fly to location"
                       onMouseEnter={(e) => (e.currentTarget.style.color = '#e9e4da')}
-                      onMouseLeave={(e) => (e.currentTarget.style.color = '#6d727b')}
-                      title="Fly to">
+                      onMouseLeave={(e) => (e.currentTarget.style.color = '#6d727b')}>
                       <IconArrowRight size={15} />
                     </button>
                     <button onClick={() => actions.deleteFavorite(fav.id)} style={{ color: '#6d727b' }}

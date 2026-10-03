@@ -221,6 +221,7 @@ export default function App() {
           <FavoritesPanelComponent
             state={{ data: store.data }}
             actions={{ addFavorite: store.addFavorite, deleteFavorite: store.deleteFavorite, setMapCenter: store.setMapCenter, setMapZoom: store.setMapZoom }}
+            mapCenter={store.mapCenter}
           />
         );
       case 'notes':
@@ -228,6 +229,7 @@ export default function App() {
           <NotesPanelComponent
             state={{ data: store.data }}
             actions={{ addNote: store.addNote, updateNote: store.updateNote, deleteNote: store.deleteNote }}
+            mapCenter={store.mapCenter}
           />
         );
       case 'settings':
@@ -278,17 +280,25 @@ export default function App() {
 
           {/* Side panel */}
           {store.activePanel !== 'none' && (
-            <aside className="w-80 flex flex-col h-full z-10 relative flex-shrink-0"
+            <aside className="w-80 flex flex-col h-full z-10 flex-shrink-0"
                    style={{ background: '#0b0c10', borderRight: '1px solid rgba(233,228,218,0.10)' }}>
-              <button
-                onClick={closePanel}
-                className="absolute top-3 right-3 w-6 h-6 rounded-full flex items-center justify-center transition-colors z-10"
-                style={{ background: 'rgba(233,228,218,0.08)', color: '#6d727b' }}
-                onMouseEnter={(e) => (e.currentTarget.style.color = '#e9e4da')}
-                onMouseLeave={(e) => (e.currentTarget.style.color = '#6d727b')}
-              >
-                <IconX size={12} strokeWidth={2.5} />
-              </button>
+              {/* Close button row — sits above panel content, never overlaps */}
+              <div className="flex items-center justify-between px-4 py-3 flex-shrink-0"
+                   style={{ borderBottom: '1px solid rgba(233,228,218,0.08)' }}>
+                <span className="text-xs font-mono tracking-widest uppercase"
+                      style={{ color: '#6d727b', letterSpacing: '0.15em' }}>
+                  {NAV_ITEMS.find((n) => n.id === store.activePanel)?.label}
+                </span>
+                <button
+                  onClick={closePanel}
+                  className="w-6 h-6 rounded-full flex items-center justify-center transition-colors flex-shrink-0"
+                  style={{ background: 'rgba(233,228,218,0.08)', color: '#6d727b' }}
+                  onMouseEnter={(e) => (e.currentTarget.style.color = '#e9e4da')}
+                  onMouseLeave={(e) => (e.currentTarget.style.color = '#6d727b')}
+                >
+                  <IconX size={12} strokeWidth={2.5} />
+                </button>
+              </div>
               <div className="flex-1 min-h-0 overflow-hidden">{renderPanel()}</div>
             </aside>
           )}
