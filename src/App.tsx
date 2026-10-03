@@ -35,31 +35,38 @@ export default function App() {
   const [isMobile, setIsMobile]           = useState(window.innerWidth < 768);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
 
+  /**
+   * activeEndpoint: which route pin the next map-click will place.
+   * 'A' = waiting for start, 'B' = waiting for destination, null = both set.
+   * Driven by RoutePanel callbacks and reset when panel closes.
+   */
+  const [activeEndpoint, setActiveEndpoint] = useState<'A' | 'B' | null>('A');
+
   // ── Refs: defeat stale closures in Leaflet handlers ──────────────────────
   const activePanelRef  = useRef<ActivePanel>('none');
   const routeFromRef    = useRef<LatLng | null>(null);
   const routeToRef      = useRef<LatLng | null>(null);
+  const activeEndpointRef = useRef<'A' | 'B' | null>('A');
   const setRouteFromFn  = useRef(store.setRouteFrom);
   const setRouteToFn    = useRef(store.setRouteTo);
   const addPinFn        = useRef(store.addPin);
   const updatePinFn     = useRef(store.updatePin);
 
-  activePanelRef.current = store.activePanel;
-  routeFromRef.current   = store.routeFrom;
-  routeToRef.current     = store.routeTo;
-  setRouteFromFn.current = store.setRouteFrom;
-  setRouteToFn.current   = store.setRouteTo;
-  addPinFn.current       = store.addPin;
-  updatePinFn.current    = store.updatePin;
+  activePanelRef.current    = store.activePanel;
+  routeFromRef.current      = store.routeFrom;
+  routeToRef.current        = store.routeTo;
+  activeEndpointRef.current = activeEndpoint;
+  setRouteFromFn.current    = store.setRouteFrom;
+  setRouteToFn.current      = store.setRouteTo;
+  addPinFn.current          = store.addPin;
+  updatePinFn.current       = store.updatePin;
 
   // ── Programmatic fly guard — stops moveend feedback loop ─────────────────
-  const isProgrammaticRef    = useRef(false);
-  const programmaticDoneRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isProgrammaticRef   = useRef(false);
+  const programmaticDoneRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Drag guard: while marker is being dragged, block map clicks ──────────
   const isDraggingMarkerRef = useRef(false);
-
-  // (double-click is now handled via Leaflet's native dblclick event)
 
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < 768);
@@ -71,9 +78,15 @@ export default function App() {
   useEffect(() => {
     if (!mapContainerRef.current) return;
     const map = mapInstance.init(mapContainerRef.current, { lat: 41.0082, lng: 28.9784 }, 13);
-    setMapReady(true);
 
-    // Wire drag callbacks — always fresh via closure over refs
+    // FIX: delay setMapReady until Leaflet has finished its initial layout
+    // so the first flyTo() isn't called before the container has real dimensions.
+    // Leaflet fires 'load' once the map is fully initialised and sized.
+    map.once('load', () => setMapReady(true));
+    // Fallback: if 'load' doesn't fire (already sized), check on next tick
+    setTimeout(() => setMapReady((prev) => prev || true), 200);
+
+    // Wire drag callbacks
     mapInstance.onFromDragEnd = (pos) => {
       isDraggingMarkerRef.current = false;
       setRouteFromFn.current(pos);
@@ -83,13 +96,10 @@ export default function App() {
       setRouteToFn.current(pos);
     };
 
-    // Block map clicks during marker drag
     map.on('dragstart', () => { isDraggingMarkerRef.current = true; });
 
-    // Pending single-click timeout — cancelled if dblclick fires first
     let singleClickTimer: ReturnType<typeof setTimeout> | null = null;
 
-    // dblclick: always drop a pin, cancel any pending single-click route action
     map.on('dblclick', (e: L.LeafletMouseEvent) => {
       if (isDraggingMarkerRef.current) return;
       if (singleClickTimer) { clearTimeout(singleClickTimer); singleClickTimer = null; }
@@ -97,7 +107,6 @@ export default function App() {
     });
 
     map.on('click', (e: L.LeafletMouseEvent) => {
-      // Ignore if a marker drag just ended
       if (isDraggingMarkerRef.current) {
         isDraggingMarkerRef.current = false;
         return;
@@ -105,24 +114,32 @@ export default function App() {
 
       const pos: LatLng = { lat: e.latlng.lat, lng: e.latlng.lng };
 
-      // Schedule single-click route action — will be cancelled if dblclick fires
       if (singleClickTimer) { clearTimeout(singleClickTimer); singleClickTimer = null; }
 
       singleClickTimer = setTimeout(() => {
         singleClickTimer = null;
-        // Only set route points on single click when route panel is active
         if (activePanelRef.current === 'route') {
-          if (!routeFromRef.current) {
+          const ep = activeEndpointRef.current;
+          // Smart placement: use activeEndpoint to decide A vs B
+          if (ep === 'A' || (!routeFromRef.current)) {
             setRouteFromFn.current(pos);
-          } else if (!routeToRef.current) {
+            // Auto-advance to B if B not yet set
+            if (!routeToRef.current) {
+              setActiveEndpoint('B');
+            } else {
+              setActiveEndpoint(null);
+            }
+          } else if (ep === 'B' || (!routeToRef.current)) {
             setRouteToFn.current(pos);
+            setActiveEndpoint(null);
           } else {
-            // Both set — reset A, clear B so user picks new start
+            // Both set — reset A, prepare for new B
             setRouteFromFn.current(pos);
             setRouteToFn.current(null);
+            setActiveEndpoint('B');
           }
         }
-        // On all other panels single-click does nothing — dblclick adds pins
+        // Other panels: single click does nothing; dblclick adds pins
       }, 280);
     });
 
@@ -131,7 +148,6 @@ export default function App() {
       addPinFn.current({ lat: e.latlng.lat, lng: e.latlng.lng });
     });
 
-    // moveend: only persist user-initiated movements
     map.on('moveend', () => {
       if (isProgrammaticRef.current) return;
       const c = map.getCenter();
@@ -153,7 +169,7 @@ export default function App() {
     );
   }, [store.data.pins, mapReady, mapInstance, store]);
 
-  // ── Sync route — real OSRM routing ───────────────────────────────────────
+  // ── Sync route ────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!mapReady) return;
     mapInstance.setRouteMarkers(store.routeFrom, store.routeTo);
@@ -164,7 +180,7 @@ export default function App() {
     }
   }, [store.routeFrom, store.routeTo, store.routeMode, mapReady, mapInstance]);
 
-  // ── Programmatic fly: only when panel actions change mapCenter ────────────
+  // ── Programmatic fly ──────────────────────────────────────────────────────
   const lastFlyTargetRef = useRef<string>('');
   useEffect(() => {
     if (!mapReady) return;
@@ -179,6 +195,15 @@ export default function App() {
       isProgrammaticRef.current = false;
     }, 1400);
   }, [store.mapCenter, store.mapZoom, mapReady, mapInstance]);
+
+  // Reset activeEndpoint when route panel opens/closes or when both points cleared
+  useEffect(() => {
+    if (store.activePanel === 'route') {
+      if (!store.routeFrom) setActiveEndpoint('A');
+      else if (!store.routeTo) setActiveEndpoint('B');
+      else setActiveEndpoint(null);
+    }
+  }, [store.activePanel, store.routeFrom, store.routeTo]);
 
   // ── Panel toggle ─────────────────────────────────────────────────────────
   const togglePanel = useCallback((id: ActivePanel) => {
@@ -207,6 +232,8 @@ export default function App() {
             routeToLabel={store.routeToLabel}
             setRouteFromLabel={store.setRouteFromLabel}
             setRouteToLabel={store.setRouteToLabel}
+            activeEndpoint={activeEndpoint}
+            onSetActiveEndpoint={setActiveEndpoint}
           />
         );
       case 'pins':
@@ -282,7 +309,6 @@ export default function App() {
           {store.activePanel !== 'none' && (
             <aside className="w-80 flex flex-col h-full z-10 flex-shrink-0"
                    style={{ background: '#0b0c10', borderRight: '1px solid rgba(233,228,218,0.10)' }}>
-              {/* Close button row — sits above panel content, never overlaps */}
               <div className="flex items-center justify-between px-4 py-3 flex-shrink-0"
                    style={{ borderBottom: '1px solid rgba(233,228,218,0.08)' }}>
                 <span className="text-xs font-mono tracking-widest uppercase"
@@ -306,7 +332,12 @@ export default function App() {
           {/* Map */}
           <div className="flex-1 relative min-w-0">
             <div ref={mapContainerRef} className="w-full h-full" />
-            <MapHints activePanel={store.activePanel} routeFrom={store.routeFrom} routeTo={store.routeTo} />
+            <MapHints
+              activePanel={store.activePanel}
+              routeFrom={store.routeFrom}
+              routeTo={store.routeTo}
+              activeEndpoint={activeEndpoint}
+            />
             <ZoomControls map={mapInstance} />
             <Notification notification={store.notification} />
           </div>
@@ -316,14 +347,17 @@ export default function App() {
       {/* ══════════ MOBILE ══════════ */}
       {isMobile && (
         <div className="flex flex-col h-full">
-          {/* Map area */}
           <div className="flex-1 relative min-h-0">
             <div ref={mapContainerRef} className="w-full h-full" />
-            <MapHints activePanel={store.activePanel} routeFrom={store.routeFrom} routeTo={store.routeTo} />
+            <MapHints
+              activePanel={store.activePanel}
+              routeFrom={store.routeFrom}
+              routeTo={store.routeTo}
+              activeEndpoint={activeEndpoint}
+            />
             <ZoomControls map={mapInstance} />
             <Notification notification={store.notification} />
 
-            {/* Floating header */}
             <div className="absolute top-0 left-0 right-0 pointer-events-none p-3" style={{ zIndex: 9999 }}>
               <div className="flex items-center gap-2 rounded-2xl px-3 py-2 pointer-events-auto"
                    style={{ background: 'rgba(11,12,16,0.92)', backdropFilter: 'blur(12px)', border: '1px solid rgba(233,228,218,0.12)' }}>
@@ -338,7 +372,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* Drawer */}
           {mobileDrawerOpen && store.activePanel !== 'none' && (
             <div className="flex flex-col flex-shrink-0"
                  style={{ height: '56vh', maxHeight: '56vh', background: '#0b0c10', borderTop: '1px solid rgba(233,228,218,0.12)' }}>
@@ -359,7 +392,6 @@ export default function App() {
             </div>
           )}
 
-          {/* Bottom nav */}
           <nav
             className="flex items-center justify-around px-1 flex-shrink-0 z-20"
             style={{
@@ -393,14 +425,17 @@ interface MapHintsProps {
   activePanel: ActivePanel;
   routeFrom: LatLng | null;
   routeTo:   LatLng | null;
+  activeEndpoint: 'A' | 'B' | null;
 }
 
-function MapHints({ activePanel, routeFrom, routeTo }: MapHintsProps) {
+function MapHints({ activePanel, routeFrom, routeTo, activeEndpoint }: MapHintsProps) {
   let hint = '';
   if (activePanel === 'route') {
-    if (!routeFrom) hint = 'Search or click the map to set start point A';
-    else if (!routeTo) hint = 'Search or click the map to set destination B';
-    else hint = 'Drag A or B to adjust the route';
+    if (!routeFrom)         hint = 'Click the map to place start point A';
+    else if (!routeTo)      hint = 'Click the map to place destination B';
+    else if (activeEndpoint === 'A') hint = 'Click to move start point A';
+    else if (activeEndpoint === 'B') hint = 'Click to move destination B';
+    else                    hint = 'Drag A or B pins to adjust the route';
   } else {
     hint = 'Double-click or right-click to drop a pin';
   }
