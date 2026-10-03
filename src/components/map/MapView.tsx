@@ -1,6 +1,10 @@
 import { useRef } from 'react';
 import L from 'leaflet';
 import { LatLng, Pin, TransportMode } from '../../types';
+import {
+  METRO_STATIONS, TRAM_STOPS, BUS_HUBS, FERRY_TERMINALS,
+  nearestPoint, buildTransitWaypoints,
+} from '../../utils/transitWaypoints';
 
 delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -10,20 +14,14 @@ L.Icon.Default.mergeOptions({
 });
 
 const PIN_COLORS: Record<string, string> = {
-  blue:   '#4f4ef1',
-  red:    '#f43f5e',
-  green:  '#22c55e',
-  yellow: '#f59e0b',
-  purple: '#8b5cf6',
-  orange: '#f97316',
+  blue:   '#4f4ef1', red:    '#f43f5e', green:  '#22c55e',
+  yellow: '#f59e0b', purple: '#8b5cf6', orange: '#f97316',
 };
 
 function createPinIcon(color: string, isFavorite: boolean): L.DivIcon {
   const hex = PIN_COLORS[color] ?? PIN_COLORS.blue;
   return L.divIcon({
-    className: '',
-    iconAnchor: [14, 36],
-    popupAnchor: [0, -38],
+    className: '', iconAnchor: [14, 36], popupAnchor: [0, -38],
     html: `<div style="filter:drop-shadow(0 2px 6px rgba(0,0,0,0.7));">
       <svg viewBox="0 0 28 36" xmlns="http://www.w3.org/2000/svg" width="28" height="36">
         <path d="M14 0C6.268 0 0 6.268 0 14c0 5.036 2.662 9.45 6.65 11.938L14 36l7.35-10.062C25.338 23.45 28 19.036 28 14 28 6.268 21.732 0 14 0z" fill="${hex}"/>
@@ -31,168 +29,218 @@ function createPinIcon(color: string, isFavorite: boolean): L.DivIcon {
         ${isFavorite
           ? `<path d="M14 10.5l1 2.1 2.3.3-1.65 1.6.4 2.35L14 15.7l-2.05 1.15.4-2.35L10.7 12.9l2.3-.3z" fill="${hex}"/>`
           : `<circle cx="14" cy="14" r="2.5" fill="${hex}" opacity="0.7"/>`}
-      </svg>
-    </div>`,
+      </svg></div>`,
   });
 }
 
 function createEndpointIcon(label: string, color: string): L.DivIcon {
   return L.divIcon({
-    className: '',
-    iconAnchor: [16, 40],
-    popupAnchor: [0, -42],
+    className: '', iconAnchor: [16, 40], popupAnchor: [0, -42],
     html: `<div style="filter:drop-shadow(0 3px 8px rgba(0,0,0,0.6));cursor:grab;">
       <svg viewBox="0 0 32 42" xmlns="http://www.w3.org/2000/svg" width="32" height="42">
         <path d="M16 0C7.163 0 0 7.163 0 16c0 9.6 16 26 16 26s16-16.4 16-26C32 7.163 24.837 0 16 0z" fill="${color}"/>
         <circle cx="16" cy="15" r="11" fill="rgba(0,0,0,0.22)"/>
         <text x="16" y="20" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="13" font-weight="700" fill="white">${label}</text>
-      </svg>
-    </div>`,
+      </svg></div>`,
   });
 }
 
-// ── OSRM routing helpers ──────────────────────────────────────────────────────
-//
-// OSRM public API only supports "foot" and "driving" profiles.
-// To visually differentiate transit modes that share the driving profile
-// we fetch BOTH profiles and pick the one that makes most sense per mode,
-// then style the polyline differently so each mode looks distinct.
-//
-// walking   → foot   profile, dashed thin green
-// funicular → foot   profile, dotted purple (short)
-// ferry     → straight line over water (OSRM driving fails over sea), cyan
-// metro     → driving profile, thick solid indigo — represents underground corridor
-// tram      → driving profile, medium dashed amber (follows road but tram-style)
-// bus       → driving profile, solid orange (road route)
-
+// ── Visual style per mode ─────────────────────────────────────────────────────
 type RouteStyle = {
-  color: string;
-  weight: number;
-  opacity: number;
-  dashArray?: string;
-  dashOffset?: string;
+  color: string; weight: number; opacity: number;
+  dashArray?: string; lineCap?: L.LineCapShape; lineJoin?: L.LineJoinShape;
 };
 
 const MODE_STYLE: Record<TransportMode, RouteStyle> = {
-  walking:   { color: '#22c55e', weight: 3, opacity: 0.85, dashArray: '6 9' },
-  funicular: { color: '#8b5cf6', weight: 3, opacity: 0.85, dashArray: '3 6' },
-  metro:     { color: '#4f4ef1', weight: 6, opacity: 0.9  },
-  tram:      { color: '#f59e0b', weight: 4, opacity: 0.9,  dashArray: '12 5' },
-  bus:       { color: '#f97316', weight: 4, opacity: 0.88  },
-  ferry:     { color: '#06b6d4', weight: 4, opacity: 0.85, dashArray: '8 10' },
+  walking:   { color: '#22c55e', weight: 3, opacity: 0.9,  dashArray: '6 9',  lineCap: 'round', lineJoin: 'round' },
+  metro:     { color: '#4f4ef1', weight: 6, opacity: 0.95, lineCap: 'round',  lineJoin: 'round' },
+  tram:      { color: '#f59e0b', weight: 4, opacity: 0.9,  dashArray: '14 5', lineCap: 'square', lineJoin: 'round' },
+  bus:       { color: '#f97316', weight: 4, opacity: 0.88, lineCap: 'round',  lineJoin: 'round' },
+  ferry:     { color: '#06b6d4', weight: 4, opacity: 0.85, dashArray: '8 10', lineCap: 'round',  lineJoin: 'round' },
+  funicular: { color: '#8b5cf6', weight: 3, opacity: 0.85, dashArray: '3 7',  lineCap: 'round',  lineJoin: 'round' },
 };
 
-// Which OSRM profile to use per mode
-const OSRM_PROFILE: Record<TransportMode, 'foot' | 'driving' | 'straight'> = {
-  walking:   'foot',
-  funicular: 'foot',
-  metro:     'driving',
-  tram:      'driving',
-  bus:       'driving',
-  ferry:     'straight',   // ferry crosses water — OSRM can't route it
-};
+// ── OSRM fetch helpers ────────────────────────────────────────────────────────
 
-interface OSRMResponse {
-  code: string;
-  routes: Array<{ geometry: { coordinates: [number, number][] } }>;
+interface OSRMRoute { geometry: { coordinates: [number, number][] } }
+interface OSRMResp  { code: string; routes: OSRMRoute[] }
+
+/**
+ * Fetch a route from the OSRM public API.
+ * `waypoints` is the full ordered list including start and end.
+ * profile: 'foot' | 'driving' | 'bike'
+ */
+async function fetchOSRM(
+  waypoints: LatLng[],
+  profile: 'foot' | 'driving' | 'bike',
+  signal: AbortSignal,
+): Promise<L.LatLngExpression[] | null> {
+  const coords = waypoints.map((p) => `${p.lng},${p.lat}`).join(';');
+  const url = `https://router.project-osrm.org/route/v1/${profile}/${coords}?overview=full&geometries=geojson`;
+  try {
+    const res  = await fetch(url, { signal });
+    if (!res.ok) return null;
+    const data = await res.json() as OSRMResp;
+    if (data.code !== 'Ok' || !data.routes.length) return null;
+    return data.routes[0].geometry.coordinates.map(
+      ([lng, lat]: [number, number]) => [lat, lng] as L.LatLngExpression,
+    );
+  } catch { return null; }
 }
 
-// Incrementing request ID — lets async fetches detect if they're stale
-let routeRequestId = 0;
-
-async function fetchOSRMRoute(
+/**
+ * Build the geometry for each transport mode.
+ *
+ * - walking   → OSRM foot, direct A→B (exact pedestrian paths)
+ * - metro     → OSRM foot A→nearest_entry, straight lines between stations,
+ *               OSRM foot exit→B  (simulates underground — no road geometry)
+ * - tram      → OSRM driving through tram stops (trams follow road geometry)
+ * - bus       → OSRM driving through bus hubs
+ * - ferry     → OSRM foot A→terminal, straight Bosphorus crossing, foot→B
+ * - funicular → OSRM foot, short hillside path
+ */
+async function buildGeometry(
   from: LatLng,
   to: LatLng,
-  profile: 'foot' | 'driving',
-): Promise<L.LatLngExpression[] | null> {
-  try {
-    const url =
-      `https://router.project-osrm.org/route/v1/${profile}/` +
-      `${from.lng},${from.lat};${to.lng},${to.lat}` +
-      `?overview=full&geometries=geojson`;
-    const res  = await fetch(url, { signal: AbortSignal.timeout(8000) });
-    const data = await res.json() as OSRMResponse;
-    if (data.code === 'Ok' && data.routes.length > 0) {
-      return data.routes[0].geometry.coordinates.map(
-        ([lng, lat]: [number, number]) => [lat, lng] as L.LatLngExpression,
-      );
+  mode: TransportMode,
+  signal: AbortSignal,
+): Promise<L.LatLngExpression[][]> {
+  // Returns array of segments; each segment is drawn as a separate polyline
+  // so we can mix straight lines with road-following segments.
+
+  switch (mode) {
+
+    case 'walking':
+    case 'funicular': {
+      const pts = await fetchOSRM([from, to], 'foot', signal);
+      return pts ? [pts] : [[[from.lat, from.lng], [to.lat, to.lng]]];
     }
-  } catch { /* timeout or network error — fall through */ }
-  return null;
+
+    case 'bus': {
+      // Route via 1 intermediate bus hub that lies geographically between A and B
+      const hubs = buildTransitWaypoints(from, to, BUS_HUBS, 3);
+      const pts  = await fetchOSRM([from, ...hubs, to], 'driving', signal);
+      return pts ? [pts] : [[[from.lat, from.lng], [to.lat, to.lng]]];
+    }
+
+    case 'tram': {
+      const stops = buildTransitWaypoints(from, to, TRAM_STOPS, 4);
+      const pts   = await fetchOSRM([from, ...stops, to], 'driving', signal);
+      return pts ? [pts] : [[[from.lat, from.lng], [to.lat, to.lng]]];
+    }
+
+    case 'metro': {
+      // Metro goes underground — we model it as:
+      //   1. Walk (foot) from A to nearest metro entry station
+      //   2. Straight lines through intermediate stations (underground)
+      //   3. Walk (foot) from exit station to B
+      const stations = buildTransitWaypoints(from, to, METRO_STATIONS, 4);
+      const entry    = stations[0];
+      const exit     = stations[stations.length - 1];
+      const middle   = stations.slice(1, -1);
+
+      const [walkIn, walkOut] = await Promise.all([
+        fetchOSRM([from, entry], 'foot', signal),
+        fetchOSRM([exit, to],   'foot', signal),
+      ]);
+
+      // Underground segment: straight lines through stations
+      const underground: L.LatLngExpression[] = [
+        [entry.lat, entry.lng],
+        ...middle.map((s): L.LatLngExpression => [s.lat, s.lng]),
+        [exit.lat,  exit.lng],
+      ];
+
+      const segments: L.LatLngExpression[][] = [];
+      if (walkIn)  segments.push(walkIn);
+      segments.push(underground);
+      if (walkOut) segments.push(walkOut);
+      return segments.length ? segments : [[[from.lat, from.lng], [to.lat, to.lng]]];
+    }
+
+    case 'ferry': {
+      // Walk to nearest terminal, straight crossing, walk to destination
+      const fromTerminal = nearestPoint(from, FERRY_TERMINALS);
+      const toTerminal   = nearestPoint(to,   FERRY_TERMINALS);
+
+      const [walkToPort, walkFromPort] = await Promise.all([
+        fetchOSRM([from, fromTerminal], 'foot', signal),
+        fetchOSRM([toTerminal, to],     'foot', signal),
+      ]);
+
+      const crossing: L.LatLngExpression[] = [
+        [fromTerminal.lat, fromTerminal.lng],
+        [toTerminal.lat,   toTerminal.lng],
+      ];
+
+      const segments: L.LatLngExpression[][] = [];
+      if (walkToPort)   segments.push(walkToPort);
+      segments.push(crossing);
+      if (walkFromPort) segments.push(walkFromPort);
+      return segments.length ? segments : [[[from.lat, from.lng], [to.lat, to.lng]]];
+    }
+  }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Request cancellation ──────────────────────────────────────────────────────
+let currentAbortController: AbortController | null = null;
 
+// ── MapView class ─────────────────────────────────────────────────────────────
 export class MapView {
-  private map: L.Map | null = null;
-  private pinLayers: Map<string, L.Marker> = new Map();
-  private routeLayer: L.LayerGroup | null = null;
-  private fromMarker: L.Marker | null = null;
-  private toMarker:   L.Marker | null = null;
+  private map:          L.Map | null = null;
+  private pinLayers:    Map<string, L.Marker> = new Map();
+  private routeLayer:   L.LayerGroup | null = null;
+  private fromMarker:   L.Marker | null = null;
+  private toMarker:     L.Marker | null = null;
 
   onFromDragEnd: ((pos: LatLng) => void) | null = null;
   onToDragEnd:   ((pos: LatLng) => void) | null = null;
 
   init(container: HTMLElement, center: LatLng, zoom: number): L.Map {
     if (this.map) return this.map;
-
     this.map = L.map(container, {
-      center:             [center.lat, center.lng],
-      zoom,
-      zoomControl:        false,
-      tap:                false,
-      tapTolerance:       10,
-      bounceAtZoomLimits: false,
+      center: [center.lat, center.lng], zoom,
+      zoomControl: false, tap: false, tapTolerance: 10, bounceAtZoomLimits: false,
     });
-
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-      subdomains:  'abc',
-      maxZoom:     19,
+      subdomains: 'abc', maxZoom: 19,
     }).addTo(this.map);
-
-    // Apply dark filter only to the tile pane — leaves marker/overlay panes unaffected
     const tilePane = this.map.getPane('tilePane');
     if (tilePane) {
       tilePane.style.filter =
         'invert(1) hue-rotate(180deg) brightness(0.82) saturate(0.55) contrast(1.1)';
     }
-
     this.routeLayer = L.layerGroup().addTo(this.map);
     return this.map;
   }
 
   destroy() {
+    currentAbortController?.abort();
     if (this.map) {
-      this.map.remove();
-      this.map = null;
+      this.map.remove(); this.map = null;
       this.pinLayers.clear();
-      this.fromMarker = null;
-      this.toMarker   = null;
+      this.fromMarker = null; this.toMarker = null;
     }
   }
 
   getMap(): L.Map | null { return this.map; }
 
-  // ── Pins ───────────────────────────────────────────────────────────────────
-
+  // ── Pins ────────────────────────────────────────────────────────────────────
   syncPins(
     pins: Pin[],
     onPinClick:  (id: string) => void,
     onPinUpdate: (id: string, pos: LatLng) => void,
   ) {
     if (!this.map) return;
-
     const currentIds = new Set(pins.map((p) => p.id));
     this.pinLayers.forEach((marker, id) => {
       if (!currentIds.has(id)) { marker.remove(); this.pinLayers.delete(id); }
     });
-
     pins.forEach((pin) => {
       const icon   = createPinIcon(pin.color, pin.isFavorite);
       const latlng = [pin.position.lat, pin.position.lng] as L.LatLngExpression;
       const existing = this.pinLayers.get(pin.id);
-
       if (existing) {
         existing.setLatLng(latlng);
         existing.setIcon(icon);
@@ -201,11 +249,10 @@ export class MapView {
         const marker = L.marker(latlng, { icon, draggable: true })
           .bindPopup(this.buildPopupContent(pin), { className: 'dark-popup', maxWidth: 220 })
           .addTo(this.map!);
-
-        marker.on('click', (e) =>
-          L.DomEvent.stopPropagation(e as unknown as L.LeafletMouseEvent));
-        marker.on('dblclick', (e) =>
-          L.DomEvent.stopPropagation(e as unknown as L.LeafletMouseEvent));
+        const stopProp = (e: L.LeafletEvent) =>
+          L.DomEvent.stopPropagation(e as unknown as L.LeafletMouseEvent);
+        marker.on('click',   stopProp);
+        marker.on('dblclick', stopProp);
         marker.on('dragend', () => {
           const ll = marker.getLatLng();
           onPinUpdate(pin.id, { lat: ll.lat, lng: ll.lng });
@@ -223,14 +270,11 @@ export class MapView {
     </div>`;
   }
 
-  // ── Route markers ──────────────────────────────────────────────────────────
-
+  // ── Route markers ────────────────────────────────────────────────────────────
   setRouteMarkers(from: LatLng | null, to: LatLng | null) {
     if (!this.map) return;
-
     if (this.fromMarker) { this.fromMarker.remove(); this.fromMarker = null; }
     if (this.toMarker)   { this.toMarker.remove();   this.toMarker   = null; }
-
     const stopProp = (e: L.LeafletEvent) =>
       L.DomEvent.stopPropagation(e as unknown as L.LeafletMouseEvent);
 
@@ -261,50 +305,59 @@ export class MapView {
     }
   }
 
-  // ── Routing ────────────────────────────────────────────────────────────────
-
+  // ── Routing ──────────────────────────────────────────────────────────────────
   async drawRouteReal(from: LatLng, to: LatLng, mode: TransportMode): Promise<void> {
     if (!this.map || !this.routeLayer) return;
 
-    // Stamp this request — any earlier async call that resolves later will abort
-    const myId = ++routeRequestId;
+    // Cancel any in-flight request for the previous mode/route
+    currentAbortController?.abort();
+    currentAbortController = new AbortController();
+    const { signal } = currentAbortController;
 
     this.routeLayer.clearLayers();
 
-    const profile = OSRM_PROFILE[mode];
-    const style   = MODE_STYLE[mode];
+    const style = MODE_STYLE[mode];
 
-    let coords: L.LatLngExpression[] | null = null;
+    try {
+      const segments = await buildGeometry(from, to, mode, signal);
+      if (signal.aborted) return;
+      if (!this.map || !this.routeLayer) return;
 
-    if (profile === 'straight') {
-      // Ferry: straight geodesic line — OSRM can't cross the Bosphorus
-      coords = [[from.lat, from.lng], [to.lat, to.lng]];
-    } else {
-      coords = await fetchOSRMRoute(from, to, profile);
-    }
+      const allBounds: L.LatLngExpression[] = [];
 
-    // If a newer request started while we were waiting, discard this result
-    if (myId !== routeRequestId) return;
-    if (!this.map || !this.routeLayer) return;
+      segments.forEach((coords, idx) => {
+        // For metro: walk segments use thinner green, underground uses full style
+        const isMetroWalk = mode === 'metro' && (idx === 0 || idx === segments.length - 1) && segments.length > 1;
+        const isFerryWalk = mode === 'ferry' && (idx === 0 || idx === segments.length - 1) && segments.length > 1;
+        const isTransitWalk = isMetroWalk || isFerryWalk;
 
-    if (coords && coords.length > 1) {
-      const polyline = L.polyline(coords, {
-        color:     style.color,
-        weight:    style.weight,
-        opacity:   style.opacity,
-        dashArray: style.dashArray,
-        lineCap:   'round',
-        lineJoin:  'round',
+        const segStyle: RouteStyle = isTransitWalk
+          ? { color: '#22c55e', weight: 2, opacity: 0.75, dashArray: '4 7', lineCap: 'round', lineJoin: 'round' }
+          : style;
+
+        const polyline = L.polyline(coords, {
+          color:     segStyle.color,
+          weight:    segStyle.weight,
+          opacity:   segStyle.opacity,
+          dashArray: segStyle.dashArray,
+          lineCap:   segStyle.lineCap ?? 'round',
+          lineJoin:  segStyle.lineJoin ?? 'round',
+        });
+        this.routeLayer!.addLayer(polyline);
+        allBounds.push(...coords);
       });
-      this.routeLayer.addLayer(polyline);
-      this.map.fitBounds(polyline.getBounds(), { padding: [70, 70], maxZoom: 16 });
-    } else {
-      // OSRM failed — draw styled fallback straight line
+
+      if (allBounds.length > 1) {
+        this.map.fitBounds(L.latLngBounds(allBounds as L.LatLngExpression[]), {
+          padding: [70, 70], maxZoom: 16, animate: true,
+        });
+      }
+    } catch (err) {
+      if (signal.aborted) return;
+      // Fallback straight line
+      if (!this.map || !this.routeLayer) return;
       const fallback = L.polyline([[from.lat, from.lng], [to.lat, to.lng]], {
-        color:     style.color,
-        weight:    style.weight,
-        opacity:   0.65,
-        dashArray: '8 12',
+        color: style.color, weight: style.weight, opacity: 0.55, dashArray: '8 12',
       });
       this.routeLayer.addLayer(fallback);
       this.map.fitBounds(fallback.getBounds(), { padding: [70, 70] });
@@ -312,7 +365,8 @@ export class MapView {
   }
 
   clearRoute() {
-    routeRequestId++; // cancel any in-flight fetch
+    currentAbortController?.abort();
+    currentAbortController = null;
     this.routeLayer?.clearLayers();
   }
 
