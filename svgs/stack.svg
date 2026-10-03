@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 90" width="1200" height="90">
+  <defs>
+    <clipPath id="rc"><rect width="1200" height="90" rx="12"/></clipPath>
+  </defs>
+  <g clip-path="url(#rc)">
+    <rect width="1200" height="90" fill="#050506"/>
+    <rect width="1200" height="90" rx="12" fill="none" stroke="rgba(233,228,218,0.08)" stroke-width="1"/>
+
+    <!-- Label -->
+    <text x="40" y="35" font-family="JetBrains Mono, monospace" font-size="10" fill="#2b3038" letter-spacing="0.2em">TECH STACK</text>
+    <line x1="40" y1="42" x2="1160" y2="42" stroke="rgba(233,228,218,0.06)" stroke-width="1"/>
+
+    <!-- Badges -->
+    <g font-family="JetBrains Mono, monospace" font-size="12" letter-spacing="0.05em">
+
+      <!-- React -->
+      <rect x="40" y="52" width="100" height="26" rx="13" fill="rgba(97,218,251,0.1)" stroke="rgba(97,218,251,0.3)" stroke-width="1"/>
+      <text x="90" y="69" text-anchor="middle" fill="#61dafb">⚛ React 18</text>
+
+      <!-- TypeScript -->
+      <rect x="152" y="52" width="120" height="26" rx="13" fill="rgba(49,120,198,0.12)" stroke="rgba(49,120,198,0.35)" stroke-width="1"/>
+      <text x="212" y="69" text-anchor="middle" fill="#3178c6">TS TypeScript</text>
+
+      <!-- Vite -->
+      <rect x="284" y="52" width="80" height="26" rx="13" fill="rgba(100,108,255,0.1)" stroke="rgba(100,108,255,0.3)" stroke-width="1"/>
+      <text x="324" y="69" text-anchor="middle" fill="#646cff">⚡ Vite</text>
+
+      <!-- Leaflet -->
+      <rect x="376" y="52" width="96" height="26" rx="13" fill="rgba(34,164,83,0.1)" stroke="rgba(34,164,83,0.3)" stroke-width="1"/>
+      <text x="424" y="69" text-anchor="middle" fill="#22a453">🍃 Leaflet</text>
+
+      <!-- Tailwind -->
+      <rect x="484" y="52" width="112" height="26" rx="13" fill="rgba(6,182,212,0.1)" stroke="rgba(6,182,212,0.3)" stroke-width="1"/>
+      <text x="540" y="69" text-anchor="middle" fill="#06b6d4">🌊 Tailwind</text>
+
+      <!-- OSRM -->
+      <rect x="608" y="52" width="96" height="26" rx="13" fill="rgba(245,158,11,0.1)" stroke="rgba(245,158,11,0.3)" stroke-width="1"/>
+      <text x="656" y="69" text-anchor="middle" fill="#f59e0b">🗺 OSRM</text>
+
+      <!-- Nominatim -->
+      <rect x="716" y="52" width="116" height="26" rx="13" fill="rgba(139,92,246,0.1)" stroke="rgba(139,92,246,0.3)" stroke-width="1"/>
+      <text x="774" y="69" text-anchor="middle" fill="#8b5cf6">📍 Nominatim</text>
+
+      <!-- OpenStreetMap -->
+      <rect x="844" y="52" width="148" height="26" rx="13" fill="rgba(116,184,44,0.1)" stroke="rgba(116,184,44,0.3)" stroke-width="1"/>
+      <text x="918" y="69" text-anchor="middle" fill="#74b82c">🌍 OpenStreetMap</text>
+
+      <!-- PWA -->
+      <rect x="1004" y="52" width="76" height="26" rx="13" fill="rgba(233,228,218,0.07)" stroke="rgba(233,228,218,0.2)" stroke-width="1"/>
+      <text x="1042" y="69" text-anchor="middle" fill="#9a9d95">📱 PWA</text>
+
+      <!-- GH Actions -->
+      <rect x="1092" y="52" width="68" height="26" rx="13" fill="rgba(45,212,191,0.1)" stroke="rgba(45,212,191,0.3)" stroke-width="1"/>
+      <text x="1126" y="69" text-anchor="middle" fill="#2dd4bf">CI/CD</text>
+    </g>
+  </g>
+</svg>

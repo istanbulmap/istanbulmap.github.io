@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 130" width="1200" height="130">
+  <defs>
+    <clipPath id="rc"><rect width="1200" height="130" rx="12"/></clipPath>
+  </defs>
+  <g clip-path="url(#rc)">
+    <rect width="1200" height="130" fill="#0b0c10"/>
+    <rect width="1200" height="130" rx="12" fill="none" stroke="rgba(233,228,218,0.08)" stroke-width="1"/>
+
+    <!-- Walking -->
+    <g transform="translate(40,22)">
+      <rect width="148" height="86" rx="10" fill="rgba(34,197,94,0.08)" stroke="rgba(34,197,94,0.25)" stroke-width="1"/>
+      <circle cx="20" cy="18" r="6" fill="none" stroke="#22c55e" stroke-width="1.5"/>
+      <path d="M14 30l-2 8 5 3M20 30l3 5-3 5M17 46l-2 6" stroke="#22c55e" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+      <text x="38" y="17" font-family="Space Grotesk, sans-serif" font-size="13" font-weight="600" fill="#e9e4da">Walking</text>
+      <text x="38" y="32" font-family="JetBrains Mono, monospace" font-size="10" fill="#22c55e">foot profile</text>
+      <text x="10" y="68" font-family="Space Grotesk, sans-serif" font-size="11" fill="#6d727b">Exact pedestrian</text>
+      <text x="10" y="82" font-family="Space Grotesk, sans-serif" font-size="11" fill="#6d727b">paths and shortcuts</text>
+    </g>
+
+    <!-- Metro -->
+    <g transform="translate(204,22)">
+      <rect width="148" height="86" rx="10" fill="rgba(79,78,241,0.08)" stroke="rgba(79,78,241,0.25)" stroke-width="1"/>
+      <rect x="8" y="8" width="20" height="24" rx="3" fill="none" stroke="#4f4ef1" stroke-width="1.5"/>
+      <path d="M8 20h20" stroke="#4f4ef1" stroke-width="1.5"/>
+      <circle cx="13" cy="14" r="2" fill="#4f4ef1"/>
+      <circle cx="23" cy="14" r="2" fill="#4f4ef1"/>
+      <path d="M11 32v4M21 32v4" stroke="#4f4ef1" stroke-width="1.5" stroke-linecap="round"/>
+      <text x="38" y="17" font-family="Space Grotesk, sans-serif" font-size="13" font-weight="600" fill="#e9e4da">Metro</text>
+      <text x="38" y="32" font-family="JetBrains Mono, monospace" font-size="10" fill="#4f4ef1">M1–M11 + Marmaray</text>
+      <text x="10" y="68" font-family="Space Grotesk, sans-serif" font-size="11" fill="#6d727b">Walk to station +</text>
+      <text x="10" y="82" font-family="Space Grotesk, sans-serif" font-size="11" fill="#6d727b">underground geometry</text>
+    </g>
+
+    <!-- Tram -->
+    <g transform="translate(368,22)">
+      <rect width="148" height="86" rx="10" fill="rgba(245,158,11,0.08)" stroke="rgba(245,158,11,0.25)" stroke-width="1"/>
+      <rect x="6" y="12" width="20" height="18" rx="2" fill="none" stroke="#f59e0b" stroke-width="1.5"/>
+      <path d="M6 20h20" stroke="#f59e0b" stroke-width="1.5"/>
+      <path d="M4 12h4M24 12h4" stroke="#f59e0b" stroke-width="1.5" stroke-linecap="round"/>
+      <circle cx="11" cy="32" r="3" fill="none" stroke="#f59e0b" stroke-width="1.5"/>
+      <circle cx="21" cy="32" r="3" fill="none" stroke="#f59e0b" stroke-width="1.5"/>
+      <text x="38" y="17" font-family="Space Grotesk, sans-serif" font-size="13" font-weight="600" fill="#e9e4da">Tram</text>
+      <text x="38" y="32" font-family="JetBrains Mono, monospace" font-size="10" fill="#f59e0b">T1 / T3 lines</text>
+      <text x="10" y="68" font-family="Space Grotesk, sans-serif" font-size="11" fill="#6d727b">Road geometry via</text>
+      <text x="10" y="82" font-family="Space Grotesk, sans-serif" font-size="11" fill="#6d727b">real tram stop nodes</text>
+    </g>
+
+    <!-- Bus -->
+    <g transform="translate(532,22)">
+      <rect width="148" height="86" rx="10" fill="rgba(249,115,22,0.08)" stroke="rgba(249,115,22,0.25)" stroke-width="1"/>
+      <rect x="4" y="10" width="24" height="18" rx="3" fill="none" stroke="#f97316" stroke-width="1.5"/>
+      <path d="M4 18h24" stroke="#f97316" stroke-width="1.5"/>
+      <circle cx="10" cy="30" r="3" fill="none" stroke="#f97316" stroke-width="1.5"/>
+      <circle cx="22" cy="30" r="3" fill="none" stroke="#f97316" stroke-width="1.5"/>
+      <text x="38" y="17" font-family="Space Grotesk, sans-serif" font-size="13" font-weight="600" fill="#e9e4da">Bus (IETT)</text>
+      <text x="38" y="32" font-family="JetBrains Mono, monospace" font-size="10" fill="#f97316">driving + hubs</text>
+      <text x="10" y="68" font-family="Space Grotesk, sans-serif" font-size="11" fill="#6d727b">Road route via major</text>
+      <text x="10" y="82" font-family="Space Grotesk, sans-serif" font-size="11" fill="#6d727b">IETT bus corridors</text>
+    </g>
+
+    <!-- Ferry -->
+    <g transform="translate(696,22)">
+      <rect width="148" height="86" rx="10" fill="rgba(6,182,212,0.08)" stroke="rgba(6,182,212,0.25)" stroke-width="1"/>
+      <path d="M4 22h24M4 22l4-8h16l4 8" fill="none" stroke="#06b6d4" stroke-width="1.5" stroke-linecap="round"/>
+      <path d="M2 28c2 2 4 2 8 0s6-2 8 0 6 2 8 0" fill="none" stroke="#06b6d4" stroke-width="1.5" stroke-linecap="round"/>
+      <path d="M12 14v-4M12 10h8" stroke="#06b6d4" stroke-width="1.5" stroke-linecap="round"/>
+      <text x="38" y="17" font-family="Space Grotesk, sans-serif" font-size="13" font-weight="600" fill="#e9e4da">Ferry (IDO)</text>
+      <text x="38" y="32" font-family="JetBrains Mono, monospace" font-size="10" fill="#06b6d4">Bosphorus crossing</text>
+      <text x="10" y="68" font-family="Space Grotesk, sans-serif" font-size="11" fill="#6d727b">Walk to terminal +</text>
+      <text x="10" y="82" font-family="Space Grotesk, sans-serif" font-size="11" fill="#6d727b">straight sea crossing</text>
+    </g>
+
+    <!-- Funicular -->
+    <g transform="translate(860,22)">
+      <rect width="148" height="86" rx="10" fill="rgba(139,92,246,0.08)" stroke="rgba(139,92,246,0.25)" stroke-width="1"/>
+      <path d="M6 32L26 8" stroke="#8b5cf6" stroke-width="1.5" stroke-linecap="round"/>
+      <rect x="14" y="6" width="12" height="9" rx="1.5" fill="none" stroke="#8b5cf6" stroke-width="1.5"/>
+      <rect x="4" y="24" width="12" height="9" rx="1.5" fill="none" stroke="#8b5cf6" stroke-width="1.5"/>
+      <text x="38" y="17" font-family="Space Grotesk, sans-serif" font-size="13" font-weight="600" fill="#e9e4da">Funicular</text>
+      <text x="38" y="32" font-family="JetBrains Mono, monospace" font-size="10" fill="#8b5cf6">F1 Kabatas–Taksim</text>
+      <text x="10" y="68" font-family="Space Grotesk, sans-serif" font-size="11" fill="#6d727b">Foot profile for</text>
+      <text x="10" y="82" font-family="Space Grotesk, sans-serif" font-size="11" fill="#6d727b">hillside short routes</text>
+    </g>
+
+    <!-- Istanbulkart note -->
+    <g transform="translate(1024,22)">
+      <rect width="148" height="86" rx="10" fill="rgba(233,228,218,0.04)" stroke="rgba(233,228,218,0.1)" stroke-width="1"/>
+      <rect x="6" y="9" width="20" height="14" rx="3" fill="none" stroke="#e9e4da" stroke-width="1.5" opacity="0.6"/>
+      <line x1="6" y1="15" x2="26" y2="15" stroke="#e9e4da" stroke-width="2" opacity="0.6"/>
+      <text x="10" y="42" font-family="Space Grotesk, sans-serif" font-size="12" font-weight="600" fill="#e9e4da" opacity="0.8">Istanbulkart</text>
+      <text x="10" y="57" font-family="Space Grotesk, sans-serif" font-size="11" fill="#6d727b">Contactless card for</text>
+      <text x="10" y="71" font-family="Space Grotesk, sans-serif" font-size="11" fill="#6d727b">all public transit</text>
+      <text x="10" y="85" font-family="JetBrains Mono, monospace" font-size="10" fill="#2dd4bf">except taxis</text>
+    </g>
+  </g>
+</svg>
