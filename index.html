@@ -5,16 +5,25 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#050506" />
     <meta name="description" content="Istanbul Navigator - Offline map, routes and travel companion for Istanbul, Turkey" />
-    <!-- FIX: removed <link rel="manifest"> pointing at a non-existent
-         manifest.json that referenced pwa-192x192.png, which caused:
-           404 on the manifest file itself, AND
-           "Download error or resource isn't a valid image" for the icon.
-         If you add a real PWA manifest later, put it back here. -->
+
+    <!-- PWA manifest — all icon files now exist in /public -->
+    <link rel="manifest" href="/manifest.json" />
+
+    <!-- Standard favicon (SVG + ICO fallback) -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/x-icon"  href="/favicon.ico" sizes="16x16 32x32 48x48" />
+
+    <!-- Apple PWA -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="IST Nav" />
+
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
     <title>Istanbul Navigator</title>
     <style>
       *, *::before, *::after { box-sizing: border-box; }
