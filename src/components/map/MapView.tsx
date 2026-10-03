@@ -18,7 +18,6 @@ const PIN_COLORS: Record<string, string> = {
   orange: '#f97316',
 };
 
-// Map-pin SVG shape — accurate point at bottom
 function createPinIcon(color: string, isFavorite: boolean): L.DivIcon {
   const hex = PIN_COLORS[color] ?? PIN_COLORS.blue;
   return L.divIcon({
@@ -29,56 +28,108 @@ function createPinIcon(color: string, isFavorite: boolean): L.DivIcon {
       <svg viewBox="0 0 28 36" xmlns="http://www.w3.org/2000/svg" width="28" height="36">
         <path d="M14 0C6.268 0 0 6.268 0 14c0 5.036 2.662 9.45 6.65 11.938L14 36l7.35-10.062C25.338 23.45 28 19.036 28 14 28 6.268 21.732 0 14 0z" fill="${hex}"/>
         <circle cx="14" cy="14" r="6" fill="white" opacity="0.92"/>
-        ${isFavorite ? `<path d="M14 10.5l1 2.1 2.3.3-1.65 1.6.4 2.35L14 15.7l-2.05 1.15.4-2.35L10.7 12.9l2.3-.3z" fill="${hex}"/>` : `<circle cx="14" cy="14" r="2.5" fill="${hex}" opacity="0.7"/>`}
+        ${isFavorite
+          ? `<path d="M14 10.5l1 2.1 2.3.3-1.65 1.6.4 2.35L14 15.7l-2.05 1.15.4-2.35L10.7 12.9l2.3-.3z" fill="${hex}"/>`
+          : `<circle cx="14" cy="14" r="2.5" fill="${hex}" opacity="0.7"/>`}
       </svg>
     </div>`,
   });
 }
 
-// Route endpoint — teardrop shape with letter
 function createEndpointIcon(label: string, color: string): L.DivIcon {
   return L.divIcon({
     className: '',
-    iconAnchor: [16, 38],
-    popupAnchor: [0, -40],
+    iconAnchor: [16, 40],
+    popupAnchor: [0, -42],
     html: `<div style="filter:drop-shadow(0 3px 8px rgba(0,0,0,0.6));cursor:grab;">
-      <svg viewBox="0 0 32 40" xmlns="http://www.w3.org/2000/svg" width="32" height="40">
-        <path d="M16 0C7.163 0 0 7.163 0 16c0 9.6 16 24 16 24s16-14.4 16-24C32 7.163 24.837 0 16 0z" fill="${color}"/>
-        <circle cx="16" cy="15" r="11" fill="rgba(0,0,0,0.25)"/>
+      <svg viewBox="0 0 32 42" xmlns="http://www.w3.org/2000/svg" width="32" height="42">
+        <path d="M16 0C7.163 0 0 7.163 0 16c0 9.6 16 26 16 26s16-16.4 16-26C32 7.163 24.837 0 16 0z" fill="${color}"/>
+        <circle cx="16" cy="15" r="11" fill="rgba(0,0,0,0.22)"/>
         <text x="16" y="20" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="13" font-weight="700" fill="white">${label}</text>
       </svg>
     </div>`,
   });
 }
 
-// OSRM profile mapping
-const OSRM_PROFILE: Partial<Record<TransportMode, string>> = {
-  walking:   'foot',
-  bus:       'driving',   // approximation
-  metro:     'driving',
-  tram:      'driving',
-  ferry:     'driving',
-  funicular: 'foot',
+// ── OSRM routing helpers ──────────────────────────────────────────────────────
+//
+// OSRM public API only supports "foot" and "driving" profiles.
+// To visually differentiate transit modes that share the driving profile
+// we fetch BOTH profiles and pick the one that makes most sense per mode,
+// then style the polyline differently so each mode looks distinct.
+//
+// walking   → foot   profile, dashed thin green
+// funicular → foot   profile, dotted purple (short)
+// ferry     → straight line over water (OSRM driving fails over sea), cyan
+// metro     → driving profile, thick solid indigo — represents underground corridor
+// tram      → driving profile, medium dashed amber (follows road but tram-style)
+// bus       → driving profile, solid orange (road route)
+
+type RouteStyle = {
+  color: string;
+  weight: number;
+  opacity: number;
+  dashArray?: string;
+  dashOffset?: string;
 };
 
-const ROUTE_COLORS: Record<TransportMode, string> = {
-  walking:   '#22c55e',
-  metro:     '#4f4ef1',
-  tram:      '#f59e0b',
-  bus:       '#f97316',
-  ferry:     '#06b6d4',
-  funicular: '#8b5cf6',
+const MODE_STYLE: Record<TransportMode, RouteStyle> = {
+  walking:   { color: '#22c55e', weight: 3, opacity: 0.85, dashArray: '6 9' },
+  funicular: { color: '#8b5cf6', weight: 3, opacity: 0.85, dashArray: '3 6' },
+  metro:     { color: '#4f4ef1', weight: 6, opacity: 0.9  },
+  tram:      { color: '#f59e0b', weight: 4, opacity: 0.9,  dashArray: '12 5' },
+  bus:       { color: '#f97316', weight: 4, opacity: 0.88  },
+  ferry:     { color: '#06b6d4', weight: 4, opacity: 0.85, dashArray: '8 10' },
 };
+
+// Which OSRM profile to use per mode
+const OSRM_PROFILE: Record<TransportMode, 'foot' | 'driving' | 'straight'> = {
+  walking:   'foot',
+  funicular: 'foot',
+  metro:     'driving',
+  tram:      'driving',
+  bus:       'driving',
+  ferry:     'straight',   // ferry crosses water — OSRM can't route it
+};
+
+interface OSRMResponse {
+  code: string;
+  routes: Array<{ geometry: { coordinates: [number, number][] } }>;
+}
+
+// Incrementing request ID — lets async fetches detect if they're stale
+let routeRequestId = 0;
+
+async function fetchOSRMRoute(
+  from: LatLng,
+  to: LatLng,
+  profile: 'foot' | 'driving',
+): Promise<L.LatLngExpression[] | null> {
+  try {
+    const url =
+      `https://router.project-osrm.org/route/v1/${profile}/` +
+      `${from.lng},${from.lat};${to.lng},${to.lat}` +
+      `?overview=full&geometries=geojson`;
+    const res  = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    const data = await res.json() as OSRMResponse;
+    if (data.code === 'Ok' && data.routes.length > 0) {
+      return data.routes[0].geometry.coordinates.map(
+        ([lng, lat]: [number, number]) => [lat, lng] as L.LatLngExpression,
+      );
+    }
+  } catch { /* timeout or network error — fall through */ }
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 export class MapView {
   private map: L.Map | null = null;
   private pinLayers: Map<string, L.Marker> = new Map();
   private routeLayer: L.LayerGroup | null = null;
   private fromMarker: L.Marker | null = null;
-  private toMarker: L.Marker | null = null;
-  private currentRoutePolyline: L.Polyline | null = null;
+  private toMarker:   L.Marker | null = null;
 
-  // Drag callbacks — set from App via refs
   onFromDragEnd: ((pos: LatLng) => void) | null = null;
   onToDragEnd:   ((pos: LatLng) => void) | null = null;
 
@@ -86,11 +137,11 @@ export class MapView {
     if (this.map) return this.map;
 
     this.map = L.map(container, {
-      center:         [center.lat, center.lng],
+      center:             [center.lat, center.lng],
       zoom,
-      zoomControl:    false,
-      tap:            false,   // disable Leaflet tap emulation — prevents ghost clicks / drift
-      tapTolerance:   10,
+      zoomControl:        false,
+      tap:                false,
+      tapTolerance:       10,
       bounceAtZoomLimits: false,
     });
 
@@ -100,6 +151,7 @@ export class MapView {
       maxZoom:     19,
     }).addTo(this.map);
 
+    // Apply dark filter only to the tile pane — leaves marker/overlay panes unaffected
     const tilePane = this.map.getPane('tilePane');
     if (tilePane) {
       tilePane.style.filter =
@@ -121,6 +173,8 @@ export class MapView {
   }
 
   getMap(): L.Map | null { return this.map; }
+
+  // ── Pins ───────────────────────────────────────────────────────────────────
 
   syncPins(
     pins: Pin[],
@@ -148,10 +202,10 @@ export class MapView {
           .bindPopup(this.buildPopupContent(pin), { className: 'dark-popup', maxWidth: 220 })
           .addTo(this.map!);
 
-        marker.on('click', (e) => {
-          L.DomEvent.stopPropagation(e as unknown as L.LeafletMouseEvent);
-          onPinClick(pin.id);
-        });
+        marker.on('click', (e) =>
+          L.DomEvent.stopPropagation(e as unknown as L.LeafletMouseEvent));
+        marker.on('dblclick', (e) =>
+          L.DomEvent.stopPropagation(e as unknown as L.LeafletMouseEvent));
         marker.on('dragend', () => {
           const ll = marker.getLatLng();
           onPinUpdate(pin.id, { lat: ll.lat, lng: ll.lng });
@@ -169,21 +223,23 @@ export class MapView {
     </div>`;
   }
 
+  // ── Route markers ──────────────────────────────────────────────────────────
+
   setRouteMarkers(from: LatLng | null, to: LatLng | null) {
     if (!this.map) return;
 
     if (this.fromMarker) { this.fromMarker.remove(); this.fromMarker = null; }
     if (this.toMarker)   { this.toMarker.remove();   this.toMarker   = null; }
 
+    const stopProp = (e: L.LeafletEvent) =>
+      L.DomEvent.stopPropagation(e as unknown as L.LeafletMouseEvent);
+
     if (from) {
       this.fromMarker = L.marker([from.lat, from.lng], {
-        icon:         createEndpointIcon('A', '#2dd4bf'),
-        draggable:    true,
-        zIndexOffset: 1000,
+        icon: createEndpointIcon('A', '#2dd4bf'), draggable: true, zIndexOffset: 1000,
       }).addTo(this.map);
-
-      this.fromMarker.on('click', (e) =>
-        L.DomEvent.stopPropagation(e as unknown as L.LeafletMouseEvent));
+      this.fromMarker.on('click', stopProp);
+      this.fromMarker.on('dblclick', stopProp);
       this.fromMarker.on('dragend', () => {
         if (!this.fromMarker || !this.onFromDragEnd) return;
         const ll = this.fromMarker.getLatLng();
@@ -193,13 +249,10 @@ export class MapView {
 
     if (to) {
       this.toMarker = L.marker([to.lat, to.lng], {
-        icon:         createEndpointIcon('B', '#f59e0b'),
-        draggable:    true,
-        zIndexOffset: 1000,
+        icon: createEndpointIcon('B', '#f59e0b'), draggable: true, zIndexOffset: 1000,
       }).addTo(this.map);
-
-      this.toMarker.on('click', (e) =>
-        L.DomEvent.stopPropagation(e as unknown as L.LeafletMouseEvent));
+      this.toMarker.on('click', stopProp);
+      this.toMarker.on('dblclick', stopProp);
       this.toMarker.on('dragend', () => {
         if (!this.toMarker || !this.onToDragEnd) return;
         const ll = this.toMarker.getLatLng();
@@ -208,71 +261,66 @@ export class MapView {
     }
   }
 
-  // Fetch real road/path geometry from OSRM (free public API)
+  // ── Routing ────────────────────────────────────────────────────────────────
+
   async drawRouteReal(from: LatLng, to: LatLng, mode: TransportMode): Promise<void> {
     if (!this.map || !this.routeLayer) return;
+
+    // Stamp this request — any earlier async call that resolves later will abort
+    const myId = ++routeRequestId;
+
     this.routeLayer.clearLayers();
 
-    const profile = OSRM_PROFILE[mode] ?? 'foot';
-    const color   = ROUTE_COLORS[mode] ?? '#4f4ef1';
+    const profile = OSRM_PROFILE[mode];
+    const style   = MODE_STYLE[mode];
 
-    try {
-      const url = `https://router.project-osrm.org/route/v1/${profile}/${from.lng},${from.lat};${to.lng},${to.lat}?overview=full&geometries=geojson`;
-      const res  = await fetch(url);
-      const data = await res.json() as OSRMResponse;
+    let coords: L.LatLngExpression[] | null = null;
 
-      if (data.code === 'Ok' && data.routes.length > 0) {
-        const coords = data.routes[0].geometry.coordinates.map(
-          ([lng, lat]: [number, number]) => [lat, lng] as L.LatLngExpression
-        );
-
-        const polyline = L.polyline(coords, {
-          color,
-          weight:    mode === 'walking' ? 3 : 5,
-          opacity:   0.9,
-          dashArray: mode === 'walking' ? '6, 8' : undefined,
-          lineCap:   'round',
-          lineJoin:  'round',
-        });
-
-        this.routeLayer.addLayer(polyline);
-        this.map.fitBounds(polyline.getBounds(), { padding: [60, 60], maxZoom: 16 });
-        return;
-      }
-    } catch {
-      // fall through to straight line fallback
+    if (profile === 'straight') {
+      // Ferry: straight geodesic line — OSRM can't cross the Bosphorus
+      coords = [[from.lat, from.lng], [to.lat, to.lng]];
+    } else {
+      coords = await fetchOSRMRoute(from, to, profile);
     }
 
-    // Fallback: dashed straight line
-    const fallback = L.polyline([[from.lat, from.lng], [to.lat, to.lng]], {
-      color,
-      weight:    3,
-      opacity:   0.7,
-      dashArray: '8, 10',
-    });
-    this.routeLayer.addLayer(fallback);
-    this.map.fitBounds(fallback.getBounds(), { padding: [60, 60] });
+    // If a newer request started while we were waiting, discard this result
+    if (myId !== routeRequestId) return;
+    if (!this.map || !this.routeLayer) return;
+
+    if (coords && coords.length > 1) {
+      const polyline = L.polyline(coords, {
+        color:     style.color,
+        weight:    style.weight,
+        opacity:   style.opacity,
+        dashArray: style.dashArray,
+        lineCap:   'round',
+        lineJoin:  'round',
+      });
+      this.routeLayer.addLayer(polyline);
+      this.map.fitBounds(polyline.getBounds(), { padding: [70, 70], maxZoom: 16 });
+    } else {
+      // OSRM failed — draw styled fallback straight line
+      const fallback = L.polyline([[from.lat, from.lng], [to.lat, to.lng]], {
+        color:     style.color,
+        weight:    style.weight,
+        opacity:   0.65,
+        dashArray: '8 12',
+      });
+      this.routeLayer.addLayer(fallback);
+      this.map.fitBounds(fallback.getBounds(), { padding: [70, 70] });
+    }
   }
 
   clearRoute() {
+    routeRequestId++; // cancel any in-flight fetch
     this.routeLayer?.clearLayers();
   }
 
   flyTo(center: LatLng, zoom?: number) {
     this.map?.flyTo([center.lat, center.lng], zoom ?? this.map.getZoom(), {
-      duration:      0.9,
-      easeLinearity: 0.5,
+      duration: 0.9, easeLinearity: 0.5,
     });
   }
-}
-
-interface OSRMResponse {
-  code: string;
-  routes: Array<{
-    geometry: { coordinates: [number, number][] };
-    duration: number;
-    distance: number;
-  }>;
 }
 
 export function useMapView() {

@@ -59,8 +59,7 @@ export default function App() {
   // ── Drag guard: while marker is being dragged, block map clicks ──────────
   const isDraggingMarkerRef = useRef(false);
 
-  // ── Double-click timer ────────────────────────────────────────────────────
-  const lastClickRef = useRef(0);
+  // (double-click is now handled via Leaflet's native dblclick event)
 
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < 768);
@@ -87,6 +86,16 @@ export default function App() {
     // Block map clicks during marker drag
     map.on('dragstart', () => { isDraggingMarkerRef.current = true; });
 
+    // Pending single-click timeout — cancelled if dblclick fires first
+    let singleClickTimer: ReturnType<typeof setTimeout> | null = null;
+
+    // dblclick: always drop a pin, cancel any pending single-click route action
+    map.on('dblclick', (e: L.LeafletMouseEvent) => {
+      if (isDraggingMarkerRef.current) return;
+      if (singleClickTimer) { clearTimeout(singleClickTimer); singleClickTimer = null; }
+      addPinFn.current({ lat: e.latlng.lat, lng: e.latlng.lng });
+    });
+
     map.on('click', (e: L.LeafletMouseEvent) => {
       // Ignore if a marker drag just ended
       if (isDraggingMarkerRef.current) {
@@ -94,37 +103,31 @@ export default function App() {
         return;
       }
 
-      const now = Date.now();
       const pos: LatLng = { lat: e.latlng.lat, lng: e.latlng.lng };
 
-      // Double-click: drop pin
-      if (now - lastClickRef.current < 370) {
-        lastClickRef.current = 0;
-        addPinFn.current(pos);
-        return;
-      }
-      lastClickRef.current = now;
+      // Schedule single-click route action — will be cancelled if dblclick fires
+      if (singleClickTimer) { clearTimeout(singleClickTimer); singleClickTimer = null; }
 
-      // Delayed single-click handler
-      setTimeout(() => {
-        if (Date.now() - lastClickRef.current < 360) return; // was double-click
-
+      singleClickTimer = setTimeout(() => {
+        singleClickTimer = null;
+        // Only set route points on single click when route panel is active
         if (activePanelRef.current === 'route') {
           if (!routeFromRef.current) {
             setRouteFromFn.current(pos);
           } else if (!routeToRef.current) {
             setRouteToFn.current(pos);
           } else {
-            // Already have both — reset A only (don't wipe B)
+            // Both set — reset A, clear B so user picks new start
             setRouteFromFn.current(pos);
             setRouteToFn.current(null);
           }
         }
-        // Other panels: only double-click drops a pin, single-click does nothing
-      }, 370);
+        // On all other panels single-click does nothing — dblclick adds pins
+      }, 280);
     });
 
     map.on('contextmenu', (e: L.LeafletMouseEvent) => {
+      if (singleClickTimer) { clearTimeout(singleClickTimer); singleClickTimer = null; }
       addPinFn.current({ lat: e.latlng.lat, lng: e.latlng.lng });
     });
 
@@ -311,7 +314,7 @@ export default function App() {
             <Notification notification={store.notification} />
 
             {/* Floating header */}
-            <div className="absolute top-0 left-0 right-0 z-10 pointer-events-none p-3">
+            <div className="absolute top-0 left-0 right-0 pointer-events-none p-3" style={{ zIndex: 9999 }}>
               <div className="flex items-center gap-2 rounded-2xl px-3 py-2 pointer-events-auto"
                    style={{ background: 'rgba(11,12,16,0.92)', backdropFilter: 'blur(12px)', border: '1px solid rgba(233,228,218,0.12)' }}>
                 <div className="w-6 h-6 rounded-lg flex items-center justify-center text-void text-[8px] font-bold font-mono flex-shrink-0"
@@ -393,7 +396,7 @@ function MapHints({ activePanel, routeFrom, routeTo }: MapHintsProps) {
   }
 
   return (
-    <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 pointer-events-none px-3 w-full flex justify-center">
+    <div className="absolute bottom-4 left-1/2 -translate-x-1/2 pointer-events-none px-3 w-full flex justify-center" style={{ zIndex: 9999 }}>
       <div
         className="rounded-full px-4 py-2 text-xs text-center whitespace-nowrap max-w-xs"
         style={{
@@ -429,7 +432,7 @@ function ZoomControls({ map }: { map: MapView }) {
   };
 
   return (
-    <div className="absolute top-16 right-3 z-10 flex flex-col gap-1.5">
+    <div className="absolute top-16 right-3 flex flex-col gap-1.5" style={{ zIndex: 9999 }}>
       <button style={btnStyle} onClick={() => leafletMap?.zoomIn()}
         onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(233,228,218,0.1)')}
         onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(11,12,16,0.92)')}>
@@ -460,8 +463,8 @@ function Notification({ notification }: { notification: AppState['notification']
   };
   return (
     <div
-      className="absolute top-16 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap"
-      style={{ border: '1px solid', boxShadow: '0 4px 20px rgba(0,0,0,0.5)', fontFamily: "'JetBrains Mono',monospace", fontSize: '12px', letterSpacing: '0.02em', ...styles[notification.type] }}
+      className="absolute top-16 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap"
+      style={{ border: '1px solid', boxShadow: '0 4px 20px rgba(0,0,0,0.5)', fontFamily: "'JetBrains Mono',monospace", fontSize: '12px', letterSpacing: '0.02em', zIndex: 9999, ...styles[notification.type] }}
     >
       {notification.message}
     </div>
