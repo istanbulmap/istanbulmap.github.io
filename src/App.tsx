@@ -35,31 +35,38 @@ export default function App() {
   const [isMobile, setIsMobile]           = useState(window.innerWidth < 768);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
 
+  /**
+   * activeEndpoint: which route pin the next map-click will place.
+   * 'A' = waiting for start, 'B' = waiting for destination, null = both set.
+   * Driven by RoutePanel callbacks and reset when panel closes.
+   */
+  const [activeEndpoint, setActiveEndpoint] = useState<'A' | 'B' | null>('A');
+
   // ── Refs: defeat stale closures in Leaflet handlers ──────────────────────
   const activePanelRef  = useRef<ActivePanel>('none');
   const routeFromRef    = useRef<LatLng | null>(null);
   const routeToRef      = useRef<LatLng | null>(null);
+  const activeEndpointRef = useRef<'A' | 'B' | null>('A');
   const setRouteFromFn  = useRef(store.setRouteFrom);
   const setRouteToFn    = useRef(store.setRouteTo);
   const addPinFn        = useRef(store.addPin);
   const updatePinFn     = useRef(store.updatePin);
 
-  activePanelRef.current = store.activePanel;
-  routeFromRef.current   = store.routeFrom;
-  routeToRef.current     = store.routeTo;
-  setRouteFromFn.current = store.setRouteFrom;
-  setRouteToFn.current   = store.setRouteTo;
-  addPinFn.current       = store.addPin;
-  updatePinFn.current    = store.updatePin;
+  activePanelRef.current    = store.activePanel;
+  routeFromRef.current      = store.routeFrom;
+  routeToRef.current        = store.routeTo;
+  activeEndpointRef.current = activeEndpoint;
+  setRouteFromFn.current    = store.setRouteFrom;
+  setRouteToFn.current      = store.setRouteTo;
+  addPinFn.current          = store.addPin;
+  updatePinFn.current       = store.updatePin;
 
   // ── Programmatic fly guard — stops moveend feedback loop ─────────────────
-  const isProgrammaticRef    = useRef(false);
-  const programmaticDoneRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isProgrammaticRef   = useRef(false);
+  const programmaticDoneRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Drag guard: while marker is being dragged, block map clicks ──────────
   const isDraggingMarkerRef = useRef(false);
-
-  // (double-click is now handled via Leaflet's native dblclick event)
 
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < 768);
@@ -67,13 +74,26 @@ export default function App() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
+  // FIX: black screen when switching between mobile and desktop layouts.
+  // The map container moves in the DOM when isMobile changes — Leaflet
+  // doesn't know the container resized, so it stays blank until we tell it.
+  useEffect(() => {
+    mapInstance.invalidateSize();
+  }, [isMobile, mapInstance]);
+
   // ── Init map ONCE ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (!mapContainerRef.current) return;
     const map = mapInstance.init(mapContainerRef.current, { lat: 41.0082, lng: 28.9784 }, 13);
-    setMapReady(true);
 
-    // Wire drag callbacks — always fresh via closure over refs
+    // FIX: delay setMapReady until Leaflet has finished its initial layout
+    // so the first flyTo() isn't called before the container has real dimensions.
+    // Leaflet fires 'load' once the map is fully initialised and sized.
+    map.once('load', () => setMapReady(true));
+    // Fallback: if 'load' doesn't fire (already sized), check on next tick
+    setTimeout(() => setMapReady((prev) => prev || true), 200);
+
+    // Wire drag callbacks
     mapInstance.onFromDragEnd = (pos) => {
       isDraggingMarkerRef.current = false;
       setRouteFromFn.current(pos);
@@ -83,13 +103,10 @@ export default function App() {
       setRouteToFn.current(pos);
     };
 
-    // Block map clicks during marker drag
     map.on('dragstart', () => { isDraggingMarkerRef.current = true; });
 
-    // Pending single-click timeout — cancelled if dblclick fires first
     let singleClickTimer: ReturnType<typeof setTimeout> | null = null;
 
-    // dblclick: always drop a pin, cancel any pending single-click route action
     map.on('dblclick', (e: L.LeafletMouseEvent) => {
       if (isDraggingMarkerRef.current) return;
       if (singleClickTimer) { clearTimeout(singleClickTimer); singleClickTimer = null; }
@@ -97,7 +114,6 @@ export default function App() {
     });
 
     map.on('click', (e: L.LeafletMouseEvent) => {
-      // Ignore if a marker drag just ended
       if (isDraggingMarkerRef.current) {
         isDraggingMarkerRef.current = false;
         return;
@@ -105,24 +121,32 @@ export default function App() {
 
       const pos: LatLng = { lat: e.latlng.lat, lng: e.latlng.lng };
 
-      // Schedule single-click route action — will be cancelled if dblclick fires
       if (singleClickTimer) { clearTimeout(singleClickTimer); singleClickTimer = null; }
 
       singleClickTimer = setTimeout(() => {
         singleClickTimer = null;
-        // Only set route points on single click when route panel is active
         if (activePanelRef.current === 'route') {
-          if (!routeFromRef.current) {
+          const ep = activeEndpointRef.current;
+          // Smart placement: use activeEndpoint to decide A vs B
+          if (ep === 'A' || (!routeFromRef.current)) {
             setRouteFromFn.current(pos);
-          } else if (!routeToRef.current) {
+            // Auto-advance to B if B not yet set
+            if (!routeToRef.current) {
+              setActiveEndpoint('B');
+            } else {
+              setActiveEndpoint(null);
+            }
+          } else if (ep === 'B' || (!routeToRef.current)) {
             setRouteToFn.current(pos);
+            setActiveEndpoint(null);
           } else {
-            // Both set — reset A, clear B so user picks new start
+            // Both set — reset A, prepare for new B
             setRouteFromFn.current(pos);
             setRouteToFn.current(null);
+            setActiveEndpoint('B');
           }
         }
-        // On all other panels single-click does nothing — dblclick adds pins
+        // Other panels: single click does nothing; dblclick adds pins
       }, 280);
     });
 
@@ -131,7 +155,6 @@ export default function App() {
       addPinFn.current({ lat: e.latlng.lat, lng: e.latlng.lng });
     });
 
-    // moveend: only persist user-initiated movements
     map.on('moveend', () => {
       if (isProgrammaticRef.current) return;
       const c = map.getCenter();
@@ -153,7 +176,7 @@ export default function App() {
     );
   }, [store.data.pins, mapReady, mapInstance, store]);
 
-  // ── Sync route — real OSRM routing ───────────────────────────────────────
+  // ── Sync route ────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!mapReady) return;
     mapInstance.setRouteMarkers(store.routeFrom, store.routeTo);
@@ -164,7 +187,7 @@ export default function App() {
     }
   }, [store.routeFrom, store.routeTo, store.routeMode, mapReady, mapInstance]);
 
-  // ── Programmatic fly: only when panel actions change mapCenter ────────────
+  // ── Programmatic fly ──────────────────────────────────────────────────────
   const lastFlyTargetRef = useRef<string>('');
   useEffect(() => {
     if (!mapReady) return;
@@ -179,6 +202,15 @@ export default function App() {
       isProgrammaticRef.current = false;
     }, 1400);
   }, [store.mapCenter, store.mapZoom, mapReady, mapInstance]);
+
+  // Reset activeEndpoint when route panel opens/closes or when both points cleared
+  useEffect(() => {
+    if (store.activePanel === 'route') {
+      if (!store.routeFrom) setActiveEndpoint('A');
+      else if (!store.routeTo) setActiveEndpoint('B');
+      else setActiveEndpoint(null);
+    }
+  }, [store.activePanel, store.routeFrom, store.routeTo]);
 
   // ── Panel toggle ─────────────────────────────────────────────────────────
   const togglePanel = useCallback((id: ActivePanel) => {
@@ -207,6 +239,9 @@ export default function App() {
             routeToLabel={store.routeToLabel}
             setRouteFromLabel={store.setRouteFromLabel}
             setRouteToLabel={store.setRouteToLabel}
+            activeEndpoint={activeEndpoint}
+            onSetActiveEndpoint={setActiveEndpoint}
+            compact={isMobile}
           />
         );
       case 'pins':
@@ -221,6 +256,7 @@ export default function App() {
           <FavoritesPanelComponent
             state={{ data: store.data }}
             actions={{ addFavorite: store.addFavorite, deleteFavorite: store.deleteFavorite, setMapCenter: store.setMapCenter, setMapZoom: store.setMapZoom }}
+            mapCenter={store.mapCenter}
           />
         );
       case 'notes':
@@ -228,6 +264,7 @@ export default function App() {
           <NotesPanelComponent
             state={{ data: store.data }}
             actions={{ addNote: store.addNote, updateNote: store.updateNote, deleteNote: store.deleteNote }}
+            mapCenter={store.mapCenter}
           />
         );
       case 'settings':
@@ -278,17 +315,24 @@ export default function App() {
 
           {/* Side panel */}
           {store.activePanel !== 'none' && (
-            <aside className="w-80 flex flex-col h-full z-10 relative flex-shrink-0"
+            <aside className="w-80 flex flex-col h-full z-10 flex-shrink-0"
                    style={{ background: '#0b0c10', borderRight: '1px solid rgba(233,228,218,0.10)' }}>
-              <button
-                onClick={closePanel}
-                className="absolute top-3 right-3 w-6 h-6 rounded-full flex items-center justify-center transition-colors z-10"
-                style={{ background: 'rgba(233,228,218,0.08)', color: '#6d727b' }}
-                onMouseEnter={(e) => (e.currentTarget.style.color = '#e9e4da')}
-                onMouseLeave={(e) => (e.currentTarget.style.color = '#6d727b')}
-              >
-                <IconX size={12} strokeWidth={2.5} />
-              </button>
+              <div className="flex items-center justify-between px-4 py-3 flex-shrink-0"
+                   style={{ borderBottom: '1px solid rgba(233,228,218,0.08)' }}>
+                <span className="text-xs font-mono tracking-widest uppercase"
+                      style={{ color: '#6d727b', letterSpacing: '0.15em' }}>
+                  {NAV_ITEMS.find((n) => n.id === store.activePanel)?.label}
+                </span>
+                <button
+                  onClick={closePanel}
+                  className="w-6 h-6 rounded-full flex items-center justify-center transition-colors flex-shrink-0"
+                  style={{ background: 'rgba(233,228,218,0.08)', color: '#6d727b' }}
+                  onMouseEnter={(e) => (e.currentTarget.style.color = '#e9e4da')}
+                  onMouseLeave={(e) => (e.currentTarget.style.color = '#6d727b')}
+                >
+                  <IconX size={12} strokeWidth={2.5} />
+                </button>
+              </div>
               <div className="flex-1 min-h-0 overflow-hidden">{renderPanel()}</div>
             </aside>
           )}
@@ -296,7 +340,12 @@ export default function App() {
           {/* Map */}
           <div className="flex-1 relative min-w-0">
             <div ref={mapContainerRef} className="w-full h-full" />
-            <MapHints activePanel={store.activePanel} routeFrom={store.routeFrom} routeTo={store.routeTo} />
+            <MapHints
+              activePanel={store.activePanel}
+              routeFrom={store.routeFrom}
+              routeTo={store.routeTo}
+              activeEndpoint={activeEndpoint}
+            />
             <ZoomControls map={mapInstance} />
             <Notification notification={store.notification} />
           </div>
@@ -306,14 +355,17 @@ export default function App() {
       {/* ══════════ MOBILE ══════════ */}
       {isMobile && (
         <div className="flex flex-col h-full">
-          {/* Map area */}
           <div className="flex-1 relative min-h-0">
             <div ref={mapContainerRef} className="w-full h-full" />
-            <MapHints activePanel={store.activePanel} routeFrom={store.routeFrom} routeTo={store.routeTo} />
+            <MapHints
+              activePanel={store.activePanel}
+              routeFrom={store.routeFrom}
+              routeTo={store.routeTo}
+              activeEndpoint={activeEndpoint}
+            />
             <ZoomControls map={mapInstance} />
             <Notification notification={store.notification} />
 
-            {/* Floating header */}
             <div className="absolute top-0 left-0 right-0 pointer-events-none p-3" style={{ zIndex: 9999 }}>
               <div className="flex items-center gap-2 rounded-2xl px-3 py-2 pointer-events-auto"
                    style={{ background: 'rgba(11,12,16,0.92)', backdropFilter: 'blur(12px)', border: '1px solid rgba(233,228,218,0.12)' }}>
@@ -328,10 +380,9 @@ export default function App() {
             </div>
           </div>
 
-          {/* Drawer */}
           {mobileDrawerOpen && store.activePanel !== 'none' && (
             <div className="flex flex-col flex-shrink-0"
-                 style={{ height: '56vh', maxHeight: '56vh', background: '#0b0c10', borderTop: '1px solid rgba(233,228,218,0.12)' }}>
+                 style={{ height: store.activePanel === 'route' ? '48vh' : '52vh', maxHeight: '65vh', background: '#0b0c10', borderTop: '1px solid rgba(233,228,218,0.12)' }}>
               <div className="flex items-center justify-between px-4 py-3 flex-shrink-0"
                    style={{ borderBottom: '1px solid rgba(233,228,218,0.10)' }}>
                 <span className="text-sm font-semibold" style={{ color: '#e9e4da', fontFamily: "'Space Grotesk',sans-serif" }}>
@@ -349,7 +400,6 @@ export default function App() {
             </div>
           )}
 
-          {/* Bottom nav */}
           <nav
             className="flex items-center justify-around px-1 flex-shrink-0 z-20"
             style={{
@@ -383,14 +433,17 @@ interface MapHintsProps {
   activePanel: ActivePanel;
   routeFrom: LatLng | null;
   routeTo:   LatLng | null;
+  activeEndpoint: 'A' | 'B' | null;
 }
 
-function MapHints({ activePanel, routeFrom, routeTo }: MapHintsProps) {
+function MapHints({ activePanel, routeFrom, routeTo, activeEndpoint }: MapHintsProps) {
   let hint = '';
   if (activePanel === 'route') {
-    if (!routeFrom) hint = 'Search or click the map to set start point A';
-    else if (!routeTo) hint = 'Search or click the map to set destination B';
-    else hint = 'Drag A or B to adjust the route';
+    if (!routeFrom)         hint = 'Click the map to place start point A';
+    else if (!routeTo)      hint = 'Click the map to place destination B';
+    else if (activeEndpoint === 'A') hint = 'Click to move start point A';
+    else if (activeEndpoint === 'B') hint = 'Click to move destination B';
+    else                    hint = 'Drag A or B pins to adjust the route';
   } else {
     hint = 'Double-click or right-click to drop a pin';
   }
@@ -414,8 +467,158 @@ function MapHints({ activePanel, routeFrom, routeTo }: MapHintsProps) {
   );
 }
 
+// ── Live location marker helpers ──────────────────────────────────────────────
+
+/** Injects the pulse keyframe once into the document head. */
+function ensurePulseStyle() {
+  if (document.getElementById('ist-pulse-style')) return;
+  const s = document.createElement('style');
+  s.id = 'ist-pulse-style';
+  s.textContent = `
+    @keyframes ist-pulse {
+      0%   { transform: scale(1);   opacity: 0.55; }
+      70%  { transform: scale(2.6); opacity: 0;    }
+      100% { transform: scale(2.6); opacity: 0;    }
+    }
+    .ist-location-pulse {
+      animation: ist-pulse 2s ease-out infinite;
+    }
+  `;
+  document.head.appendChild(s);
+}
+
+function createLocationIcon(): L.DivIcon {
+  ensurePulseStyle();
+  return L.divIcon({
+    className: '',
+    iconAnchor: [12, 12],
+    iconSize:   [24, 24],
+    html: `
+      <div style="position:relative;width:24px;height:24px;">
+        <!-- pulse ring -->
+        <div class="ist-location-pulse" style="
+          position:absolute;inset:0;border-radius:50%;
+          background:rgba(45,212,191,0.35);
+        "></div>
+        <!-- white halo -->
+        <div style="
+          position:absolute;inset:2px;border-radius:50%;
+          background:#fff;
+          box-shadow:0 0 0 1.5px rgba(45,212,191,0.6), 0 2px 8px rgba(0,0,0,0.55);
+        "></div>
+        <!-- teal dot -->
+        <div style="
+          position:absolute;inset:5px;border-radius:50%;
+          background:#2dd4bf;
+        "></div>
+      </div>`,
+  });
+}
+
+// ── ZoomControls + live location ──────────────────────────────────────────────
+
 function ZoomControls({ map }: { map: MapView }) {
   const leafletMap = map.getMap();
+
+  // tracking state
+  const [tracking, setTracking]   = React.useState(false);
+  const [hasError, setHasError]   = React.useState(false);
+  const watchIdRef                = React.useRef<number | null>(null);
+  const locationMarkerRef         = React.useRef<L.Marker | null>(null);
+  const accuracyCircleRef         = React.useRef<L.Circle | null>(null);
+  const hasFlewRef                = React.useRef(false);   // fly only on first fix
+
+  // Clean up marker + circle helpers
+  const clearLocationLayers = React.useCallback(() => {
+    locationMarkerRef.current?.remove();
+    locationMarkerRef.current = null;
+    accuracyCircleRef.current?.remove();
+    accuracyCircleRef.current = null;
+  }, []);
+
+  // Stop watching GPS
+  const stopTracking = React.useCallback(() => {
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+    clearLocationLayers();
+    hasFlewRef.current = false;
+    setTracking(false);
+    setHasError(false);
+  }, [clearLocationLayers]);
+
+  // Start/update GPS watch
+  const startTracking = React.useCallback(() => {
+    if (!leafletMap) return;
+    if (!navigator.geolocation) {
+      setHasError(true);
+      return;
+    }
+
+    setHasError(false);
+    setTracking(true);
+    hasFlewRef.current = false;
+
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (pos) => {
+        const { latitude: lat, longitude: lng, accuracy } = pos.coords;
+        const latlng: L.LatLngExpression = [lat, lng];
+
+        // Fly to location on first fix only
+        if (!hasFlewRef.current) {
+          leafletMap.flyTo(latlng, Math.min(leafletMap.getZoom(), 16), {
+            duration: 1, easeLinearity: 0.4,
+          });
+          hasFlewRef.current = true;
+        }
+
+        // Update or create marker
+        if (locationMarkerRef.current) {
+          locationMarkerRef.current.setLatLng(latlng);
+        } else {
+          locationMarkerRef.current = L.marker(latlng, {
+            icon: createLocationIcon(),
+            zIndexOffset: 2000,
+            interactive: false,
+          }).addTo(leafletMap);
+        }
+
+        // Update or create accuracy ring
+        if (accuracyCircleRef.current) {
+          accuracyCircleRef.current.setLatLng(latlng);
+          accuracyCircleRef.current.setRadius(accuracy);
+        } else {
+          accuracyCircleRef.current = L.circle(latlng, {
+            radius: accuracy,
+            color:       '#2dd4bf',
+            fillColor:   '#2dd4bf',
+            fillOpacity: 0.07,
+            weight:      1.5,
+            opacity:     0.35,
+            interactive: false,
+          }).addTo(leafletMap);
+        }
+      },
+      (_err) => {
+        setHasError(true);
+        setTracking(false);
+        clearLocationLayers();
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 2000 },
+    );
+  }, [leafletMap, clearLocationLayers]);
+
+  // Toggle
+  const handleLocate = React.useCallback(() => {
+    if (tracking) stopTracking();
+    else          startTracking();
+  }, [tracking, startTracking, stopTracking]);
+
+  // Cleanup on unmount
+  React.useEffect(() => () => stopTracking(), [stopTracking]);
+
+  // ── render ──────────────────────────────────────────────────────────────────
   const btnStyle: React.CSSProperties = {
     width: '36px', height: '36px',
     background:  'rgba(11,12,16,0.92)',
@@ -428,7 +631,24 @@ function ZoomControls({ map }: { map: MapView }) {
     cursor:      'pointer',
     backdropFilter: 'blur(8px)',
     boxShadow:   '0 2px 12px rgba(0,0,0,0.5)',
-    transition:  'background 0.15s, border-color 0.15s',
+    transition:  'background 0.15s, border-color 0.15s, color 0.15s',
+  };
+
+  const locateBtnStyle: React.CSSProperties = {
+    ...btnStyle,
+    marginTop: '4px',
+    // Active state: teal border + tinted background + teal icon
+    ...(tracking ? {
+      border:     '1px solid rgba(45,212,191,0.55)',
+      background: 'rgba(45,212,191,0.10)',
+      color:      '#2dd4bf',
+      boxShadow:  '0 0 0 1px rgba(45,212,191,0.2), 0 2px 12px rgba(0,0,0,0.5)',
+    } : {}),
+    ...(hasError ? {
+      border:     '1px solid rgba(244,63,94,0.45)',
+      background: 'rgba(244,63,94,0.08)',
+      color:      '#f43f5e',
+    } : {}),
   };
 
   return (
@@ -443,11 +663,11 @@ function ZoomControls({ map }: { map: MapView }) {
         onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(11,12,16,0.92)')}>
         <IconZoomOut size={16} />
       </button>
-      <button style={{ ...btnStyle, marginTop: '4px' }}
-        onClick={() => leafletMap?.locate({ setView: true, maxZoom: 16 })}
-        title="My location"
-        onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(233,228,218,0.1)')}
-        onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(11,12,16,0.92)')}>
+      <button
+        style={locateBtnStyle}
+        onClick={handleLocate}
+        title={tracking ? 'Stop tracking location' : hasError ? 'Location unavailable' : 'Track my location'}
+      >
         <IconLocate size={15} />
       </button>
     </div>
