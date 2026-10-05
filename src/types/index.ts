@@ -1,4 +1,4 @@
-export type TransportMode = 'walking' | 'bus' | 'metro' | 'ferry' | 'tram' | 'funicular';
+export type TransportMode = 'walking' | 'car' | 'bus' | 'metro' | 'ferry' | 'tram' | 'funicular';
 
 export interface LatLng {
   lat: number;
