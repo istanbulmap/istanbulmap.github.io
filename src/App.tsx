@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useLayoutEffect } from 'react';
 import L from 'leaflet';
 import { useAppStore, AppState } from './hooks/useAppStore';
 import { MapView, useMapView } from './components/map/MapView';
@@ -27,30 +27,53 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'settings',  Icon: IconSettings, label: 'Settings'  },
 ];
 
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
+  useEffect(() => {
+    const fn = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', fn);
+    return () => window.removeEventListener('resize', fn);
+  }, []);
+  return isMobile;
+}
+
 export default function App() {
   const store       = useAppStore();
   const mapInstance = useMapView();
-  const mapContainerRef = useRef<HTMLDivElement>(null);
-  const [mapReady, setMapReady]           = useState(false);
-  const [isMobile, setIsMobile]           = useState(window.innerWidth < 768);
-  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+  const isMobile    = useIsMobile();
 
   /**
-   * activeEndpoint: which route pin the next map-click will place.
-   * 'A' = waiting for start, 'B' = waiting for destination, null = both set.
-   * Driven by RoutePanel callbacks and reset when panel closes.
+   * KEY FIX — single map container.
+   *
+   * Previously mapContainerRef was rendered inside two separate JSX branches
+   * (!isMobile / isMobile). When isMobile flipped, React unmounted one branch
+   * and mounted the other, destroying the DOM node Leaflet was attached to.
+   * The map never re-initialised because the init useEffect runs only once.
+   * Result: black screen.
+   *
+   * Solution: one <div ref={mapContainerRef}> that is ALWAYS in the DOM,
+   * positioned absolutely to fill its parent. The desktop sidebar and mobile
+   * chrome are overlaid on top of it. Leaflet always has the same live node.
    */
+  const mapContainerRef = useRef<HTMLDivElement>(null);
+  const [mapReady, setMapReady] = useState(false);
+
+  // activeEndpoint: which pin the next map-click places
   const [activeEndpoint, setActiveEndpoint] = useState<'A' | 'B' | null>('A');
 
-  // ── Refs: defeat stale closures in Leaflet handlers ──────────────────────
-  const activePanelRef  = useRef<ActivePanel>('none');
-  const routeFromRef    = useRef<LatLng | null>(null);
-  const routeToRef      = useRef<LatLng | null>(null);
+  // Mobile bottom-sheet state: 'hidden' | 'peek' | 'half' | 'full'
+  type SheetState = 'hidden' | 'peek' | 'half' | 'full';
+  const [sheetState, setSheetState] = useState<SheetState>('hidden');
+
+  // Stale-closure refs for Leaflet handlers
+  const activePanelRef    = useRef<ActivePanel>('none');
+  const routeFromRef      = useRef<LatLng | null>(null);
+  const routeToRef        = useRef<LatLng | null>(null);
   const activeEndpointRef = useRef<'A' | 'B' | null>('A');
-  const setRouteFromFn  = useRef(store.setRouteFrom);
-  const setRouteToFn    = useRef(store.setRouteTo);
-  const addPinFn        = useRef(store.addPin);
-  const updatePinFn     = useRef(store.updatePin);
+  const setRouteFromFn    = useRef(store.setRouteFrom);
+  const setRouteToFn      = useRef(store.setRouteTo);
+  const addPinFn          = useRef(store.addPin);
+  const updatePinFn       = useRef(store.updatePin);
 
   activePanelRef.current    = store.activePanel;
   routeFromRef.current      = store.routeFrom;
@@ -61,39 +84,18 @@ export default function App() {
   addPinFn.current          = store.addPin;
   updatePinFn.current       = store.updatePin;
 
-  // ── Programmatic fly guard — stops moveend feedback loop ─────────────────
   const isProgrammaticRef   = useRef(false);
   const programmaticDoneRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // ── Drag guard: while marker is being dragged, block map clicks ──────────
   const isDraggingMarkerRef = useRef(false);
-
-  useEffect(() => {
-    const onResize = () => setIsMobile(window.innerWidth < 768);
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
-
-  // FIX: black screen when switching between mobile and desktop layouts.
-  // The map container moves in the DOM when isMobile changes — Leaflet
-  // doesn't know the container resized, so it stays blank until we tell it.
-  useEffect(() => {
-    mapInstance.invalidateSize();
-  }, [isMobile, mapInstance]);
 
   // ── Init map ONCE ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (!mapContainerRef.current) return;
     const map = mapInstance.init(mapContainerRef.current, { lat: 41.0082, lng: 28.9784 }, 13);
 
-    // FIX: delay setMapReady until Leaflet has finished its initial layout
-    // so the first flyTo() isn't called before the container has real dimensions.
-    // Leaflet fires 'load' once the map is fully initialised and sized.
     map.once('load', () => setMapReady(true));
-    // Fallback: if 'load' doesn't fire (already sized), check on next tick
-    setTimeout(() => setMapReady((prev) => prev || true), 200);
+    setTimeout(() => setMapReady((p) => p || true), 300);
 
-    // Wire drag callbacks
     mapInstance.onFromDragEnd = (pos) => {
       isDraggingMarkerRef.current = false;
       setRouteFromFn.current(pos);
@@ -105,53 +107,38 @@ export default function App() {
 
     map.on('dragstart', () => { isDraggingMarkerRef.current = true; });
 
-    let singleClickTimer: ReturnType<typeof setTimeout> | null = null;
+    let clickTimer: ReturnType<typeof setTimeout> | null = null;
 
     map.on('dblclick', (e: L.LeafletMouseEvent) => {
       if (isDraggingMarkerRef.current) return;
-      if (singleClickTimer) { clearTimeout(singleClickTimer); singleClickTimer = null; }
+      if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
       addPinFn.current({ lat: e.latlng.lat, lng: e.latlng.lng });
     });
 
     map.on('click', (e: L.LeafletMouseEvent) => {
-      if (isDraggingMarkerRef.current) {
-        isDraggingMarkerRef.current = false;
-        return;
-      }
-
+      if (isDraggingMarkerRef.current) { isDraggingMarkerRef.current = false; return; }
       const pos: LatLng = { lat: e.latlng.lat, lng: e.latlng.lng };
-
-      if (singleClickTimer) { clearTimeout(singleClickTimer); singleClickTimer = null; }
-
-      singleClickTimer = setTimeout(() => {
-        singleClickTimer = null;
-        if (activePanelRef.current === 'route') {
-          const ep = activeEndpointRef.current;
-          // Smart placement: use activeEndpoint to decide A vs B
-          if (ep === 'A' || (!routeFromRef.current)) {
-            setRouteFromFn.current(pos);
-            // Auto-advance to B if B not yet set
-            if (!routeToRef.current) {
-              setActiveEndpoint('B');
-            } else {
-              setActiveEndpoint(null);
-            }
-          } else if (ep === 'B' || (!routeToRef.current)) {
-            setRouteToFn.current(pos);
-            setActiveEndpoint(null);
-          } else {
-            // Both set — reset A, prepare for new B
-            setRouteFromFn.current(pos);
-            setRouteToFn.current(null);
-            setActiveEndpoint('B');
-          }
+      if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
+      clickTimer = setTimeout(() => {
+        clickTimer = null;
+        if (activePanelRef.current !== 'route') return;
+        const ep = activeEndpointRef.current;
+        if (ep === 'A' || !routeFromRef.current) {
+          setRouteFromFn.current(pos);
+          setActiveEndpoint(!routeToRef.current ? 'B' : null);
+        } else if (ep === 'B' || !routeToRef.current) {
+          setRouteToFn.current(pos);
+          setActiveEndpoint(null);
+        } else {
+          setRouteFromFn.current(pos);
+          setRouteToFn.current(null);
+          setActiveEndpoint('B');
         }
-        // Other panels: single click does nothing; dblclick adds pins
-      }, 280);
+      }, 260);
     });
 
     map.on('contextmenu', (e: L.LeafletMouseEvent) => {
-      if (singleClickTimer) { clearTimeout(singleClickTimer); singleClickTimer = null; }
+      if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
       addPinFn.current({ lat: e.latlng.lat, lng: e.latlng.lng });
     });
 
@@ -165,6 +152,13 @@ export default function App() {
     return () => { mapInstance.destroy(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ── Invalidate size whenever layout changes (isMobile flip) ──────────────
+  // useLayoutEffect fires synchronously after DOM mutations, before paint —
+  // so Leaflet measures the correct container size on the same frame.
+  useLayoutEffect(() => {
+    mapInstance.invalidateSize();
+  }, [isMobile, mapInstance]);
 
   // ── Sync pins ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -188,288 +182,349 @@ export default function App() {
   }, [store.routeFrom, store.routeTo, store.routeMode, mapReady, mapInstance]);
 
   // ── Programmatic fly ──────────────────────────────────────────────────────
-  const lastFlyTargetRef = useRef<string>('');
+  const lastFlyTargetRef = useRef('');
   useEffect(() => {
     if (!mapReady) return;
     const key = `${store.mapCenter.lat.toFixed(5)},${store.mapCenter.lng.toFixed(5)},${store.mapZoom}`;
     if (key === lastFlyTargetRef.current) return;
     lastFlyTargetRef.current = key;
-
     isProgrammaticRef.current = true;
     if (programmaticDoneRef.current) clearTimeout(programmaticDoneRef.current);
     mapInstance.flyTo(store.mapCenter, store.mapZoom);
-    programmaticDoneRef.current = setTimeout(() => {
-      isProgrammaticRef.current = false;
-    }, 1400);
+    programmaticDoneRef.current = setTimeout(() => { isProgrammaticRef.current = false; }, 1400);
   }, [store.mapCenter, store.mapZoom, mapReady, mapInstance]);
 
-  // Reset activeEndpoint when route panel opens/closes or when both points cleared
+  // ── Active endpoint resets ────────────────────────────────────────────────
   useEffect(() => {
     if (store.activePanel === 'route') {
-      if (!store.routeFrom) setActiveEndpoint('A');
-      else if (!store.routeTo) setActiveEndpoint('B');
-      else setActiveEndpoint(null);
+      if (!store.routeFrom)      setActiveEndpoint('A');
+      else if (!store.routeTo)   setActiveEndpoint('B');
+      else                       setActiveEndpoint(null);
     }
   }, [store.activePanel, store.routeFrom, store.routeTo]);
 
-  // ── Panel toggle ─────────────────────────────────────────────────────────
-  const togglePanel = useCallback((id: ActivePanel) => {
+  // ── Panel/sheet helpers ───────────────────────────────────────────────────
+  const openPanel = useCallback((id: ActivePanel) => {
     if (store.activePanel === id) {
       store.setActivePanel('none');
-      setMobileDrawerOpen(false);
+      setSheetState('hidden');
     } else {
       store.setActivePanel(id);
-      setMobileDrawerOpen(true);
+      setSheetState(id === 'route' ? 'peek' : 'half');
     }
   }, [store]);
 
   const closePanel = useCallback(() => {
     store.setActivePanel('none');
-    setMobileDrawerOpen(false);
+    setSheetState('hidden');
   }, [store]);
 
-  const renderPanel = () => {
+  // ── Render panel content ──────────────────────────────────────────────────
+  const routePanelProps = {
+    state:   { routeFrom: store.routeFrom, routeTo: store.routeTo, routeMode: store.routeMode, data: store.data },
+    actions: { setRouteFrom: store.setRouteFrom, setRouteTo: store.setRouteTo, setRouteMode: store.setRouteMode, saveRoute: store.saveRoute, deleteRoute: store.deleteRoute, notify: store.notify },
+    routeFromLabel: store.routeFromLabel, routeToLabel: store.routeToLabel,
+    setRouteFromLabel: store.setRouteFromLabel, setRouteToLabel: store.setRouteToLabel,
+    activeEndpoint, onSetActiveEndpoint: setActiveEndpoint,
+  };
+
+  const renderPanelContent = (compact = false) => {
     switch (store.activePanel) {
-      case 'route':
-        return (
-          <RoutePanelComponent
-            state={{ routeFrom: store.routeFrom, routeTo: store.routeTo, routeMode: store.routeMode, data: store.data }}
-            actions={{ setRouteFrom: store.setRouteFrom, setRouteTo: store.setRouteTo, setRouteMode: store.setRouteMode, saveRoute: store.saveRoute, deleteRoute: store.deleteRoute, notify: store.notify }}
-            routeFromLabel={store.routeFromLabel}
-            routeToLabel={store.routeToLabel}
-            setRouteFromLabel={store.setRouteFromLabel}
-            setRouteToLabel={store.setRouteToLabel}
-            activeEndpoint={activeEndpoint}
-            onSetActiveEndpoint={setActiveEndpoint}
-            compact={isMobile}
-          />
-        );
-      case 'pins':
-        return (
-          <PinsPanelComponent
-            state={{ data: store.data, selectedPinId: store.selectedPinId }}
-            actions={{ updatePin: store.updatePin, deletePin: store.deletePin, selectPin: store.selectPin, togglePinFavorite: store.togglePinFavorite, flyToPin: store.flyToPin }}
-          />
-        );
-      case 'favorites':
-        return (
-          <FavoritesPanelComponent
-            state={{ data: store.data }}
-            actions={{ addFavorite: store.addFavorite, deleteFavorite: store.deleteFavorite, setMapCenter: store.setMapCenter, setMapZoom: store.setMapZoom }}
-            mapCenter={store.mapCenter}
-          />
-        );
-      case 'notes':
-        return (
-          <NotesPanelComponent
-            state={{ data: store.data }}
-            actions={{ addNote: store.addNote, updateNote: store.updateNote, deleteNote: store.deleteNote }}
-            mapCenter={store.mapCenter}
-          />
-        );
-      case 'settings':
-        return (
-          <SettingsPanelComponent
-            state={{ data: store.data }}
-            actions={{ exportData: store.exportData, importData: store.importData, resetData: store.resetData, notify: store.notify }}
-          />
-        );
-      default:
-        return null;
+      case 'route':     return <RoutePanelComponent {...routePanelProps} compact={compact} />;
+      case 'pins':      return <PinsPanelComponent state={{ data: store.data, selectedPinId: store.selectedPinId }} actions={{ updatePin: store.updatePin, deletePin: store.deletePin, selectPin: store.selectPin, togglePinFavorite: store.togglePinFavorite, flyToPin: store.flyToPin }} />;
+      case 'favorites': return <FavoritesPanelComponent state={{ data: store.data }} actions={{ addFavorite: store.addFavorite, deleteFavorite: store.deleteFavorite, setMapCenter: store.setMapCenter, setMapZoom: store.setMapZoom }} mapCenter={store.mapCenter} />;
+      case 'notes':     return <NotesPanelComponent state={{ data: store.data }} actions={{ addNote: store.addNote, updateNote: store.updateNote, deleteNote: store.deleteNote }} mapCenter={store.mapCenter} />;
+      case 'settings':  return <SettingsPanelComponent state={{ data: store.data }} actions={{ exportData: store.exportData, importData: store.importData, resetData: store.resetData, notify: store.notify }} />;
+      default:          return null;
     }
   };
 
-  return (
-    <div className="w-full h-full overflow-hidden" style={{ background: '#050506', fontFamily: "'Space Grotesk', system-ui, sans-serif" }}>
+  // Sheet heights (% of viewport height)
+  const SHEET_H: Record<SheetState, string> = {
+    hidden: '0px',
+    peek:   '200px',   // just inputs visible, map takes most of screen
+    half:   '48vh',
+    full:   '85vh',
+  };
 
-      {/* ══════════ DESKTOP ══════════ */}
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: '#050506', overflow: 'hidden' }}>
+
+      {/* ══ MAP — always mounted, always filling parent ══════════════════════ */}
+      <div
+        ref={mapContainerRef}
+        style={{
+          position: 'absolute', inset: 0,
+          // On desktop, leave room for the sidebar (64px nav + optional 320px panel)
+          left: isMobile ? 0 : (store.activePanel !== 'none' ? 384 : 64),
+          transition: 'left 0.25s ease',
+        }}
+      />
+
+      {/* ══ DESKTOP LAYOUT ════════════════════════════════════════════════════ */}
       {!isMobile && (
-        <div className="flex h-full">
-          {/* Sidebar nav */}
-          <nav className="flex flex-col items-center gap-1 py-5 px-2 w-16 z-20 flex-shrink-0"
-               style={{ background: '#0b0c10', borderRight: '1px solid rgba(233,228,218,0.10)' }}>
-            <div className="mb-5 select-none">
-              <div className="w-9 h-9 rounded-xl flex items-center justify-center text-void text-[9px] font-bold font-mono shadow-glow"
-                   style={{ background: '#e9e4da' }}>
-                IST
-              </div>
-            </div>
+        <>
+          {/* Nav sidebar */}
+          <nav style={{
+            position: 'absolute', left: 0, top: 0, bottom: 0, width: 64,
+            background: '#0b0c10', borderRight: '1px solid rgba(233,228,218,0.10)',
+            display: 'flex', flexDirection: 'column', alignItems: 'center',
+            padding: '20px 8px', zIndex: 100, gap: 4,
+          }}>
+            <div style={{
+              width: 36, height: 36, borderRadius: 10, background: '#e9e4da',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 9, fontWeight: 700, fontFamily: 'monospace', color: '#050506',
+              marginBottom: 20, flexShrink: 0,
+            }}>IST</div>
+
             {NAV_ITEMS.map(({ id, Icon, label }) => (
-              <button
-                key={id}
-                onClick={() => togglePanel(id)}
-                title={label}
-                className="w-10 h-10 rounded-xl flex items-center justify-center transition-all"
-                style={{
-                  background: store.activePanel === id ? 'rgba(233,228,218,0.12)' : 'transparent',
-                  color:      store.activePanel === id ? '#e9e4da' : '#6d727b',
-                  boxShadow:  store.activePanel === id ? '0 0 0 1px rgba(233,228,218,0.2)' : 'none',
-                }}
-              >
+              <button key={id} onClick={() => openPanel(id)} title={label} style={{
+                width: 40, height: 40, borderRadius: 10, border: 'none', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: store.activePanel === id ? 'rgba(233,228,218,0.12)' : 'transparent',
+                color:      store.activePanel === id ? '#e9e4da' : '#6d727b',
+                boxShadow:  store.activePanel === id ? '0 0 0 1px rgba(233,228,218,0.18)' : 'none',
+                transition: 'background 0.15s, color 0.15s',
+              }}>
                 <Icon size={19} />
               </button>
             ))}
-            <div className="flex-1" />
-            <div className="text-[9px] font-mono" style={{ color: '#2b3038' }}>NAV</div>
+            <div style={{ flex: 1 }} />
+            <span style={{ fontSize: 9, fontFamily: 'monospace', color: '#2b3038' }}>NAV</span>
           </nav>
 
           {/* Side panel */}
           {store.activePanel !== 'none' && (
-            <aside className="w-80 flex flex-col h-full z-10 flex-shrink-0"
-                   style={{ background: '#0b0c10', borderRight: '1px solid rgba(233,228,218,0.10)' }}>
-              <div className="flex items-center justify-between px-4 py-3 flex-shrink-0"
-                   style={{ borderBottom: '1px solid rgba(233,228,218,0.08)' }}>
-                <span className="text-xs font-mono tracking-widest uppercase"
-                      style={{ color: '#6d727b', letterSpacing: '0.15em' }}>
+            <aside style={{
+              position: 'absolute', left: 64, top: 0, bottom: 0, width: 320,
+              background: '#0b0c10', borderRight: '1px solid rgba(233,228,218,0.10)',
+              display: 'flex', flexDirection: 'column', zIndex: 99,
+            }}>
+              {/* Panel header */}
+              <div style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                padding: '12px 16px', borderBottom: '1px solid rgba(233,228,218,0.08)',
+                flexShrink: 0,
+              }}>
+                <span style={{ fontSize: 10, fontFamily: 'monospace', letterSpacing: '0.15em', textTransform: 'uppercase', color: '#6d727b' }}>
                   {NAV_ITEMS.find((n) => n.id === store.activePanel)?.label}
                 </span>
-                <button
-                  onClick={closePanel}
-                  className="w-6 h-6 rounded-full flex items-center justify-center transition-colors flex-shrink-0"
-                  style={{ background: 'rgba(233,228,218,0.08)', color: '#6d727b' }}
-                  onMouseEnter={(e) => (e.currentTarget.style.color = '#e9e4da')}
-                  onMouseLeave={(e) => (e.currentTarget.style.color = '#6d727b')}
+                <button onClick={closePanel} style={{
+                  width: 24, height: 24, borderRadius: '50%', border: 'none', cursor: 'pointer',
+                  background: 'rgba(233,228,218,0.08)', color: '#6d727b',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = '#e9e4da'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = '#6d727b'; }}
                 >
                   <IconX size={12} strokeWidth={2.5} />
                 </button>
               </div>
-              <div className="flex-1 min-h-0 overflow-hidden">{renderPanel()}</div>
+              <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+                {renderPanelContent(false)}
+              </div>
             </aside>
           )}
 
-          {/* Map */}
-          <div className="flex-1 relative min-w-0">
-            <div ref={mapContainerRef} className="w-full h-full" />
-            <MapHints
-              activePanel={store.activePanel}
-              routeFrom={store.routeFrom}
-              routeTo={store.routeTo}
-              activeEndpoint={activeEndpoint}
-            />
-            <ZoomControls map={mapInstance} />
-            <Notification notification={store.notification} />
-          </div>
-        </div>
+          {/* Desktop map overlays */}
+          <MapHints activePanel={store.activePanel} routeFrom={store.routeFrom} routeTo={store.routeTo} activeEndpoint={activeEndpoint} isMobile={false} />
+          <ZoomControls map={mapInstance} />
+          <Notification notification={store.notification} />
+        </>
       )}
 
-      {/* ══════════ MOBILE ══════════ */}
+      {/* ══ MOBILE LAYOUT ═════════════════════════════════════════════════════
+          The map fills the whole screen. Everything else floats on top.
+          Bottom sheet slides up from the bottom — it does NOT push the map.
+      ══════════════════════════════════════════════════════════════════════ */}
       {isMobile && (
-        <div className="flex flex-col h-full">
-          <div className="flex-1 relative min-h-0">
-            <div ref={mapContainerRef} className="w-full h-full" />
-            <MapHints
-              activePanel={store.activePanel}
-              routeFrom={store.routeFrom}
-              routeTo={store.routeTo}
-              activeEndpoint={activeEndpoint}
-            />
-            <ZoomControls map={mapInstance} />
-            <Notification notification={store.notification} />
-
-            <div className="absolute top-0 left-0 right-0 pointer-events-none p-3" style={{ zIndex: 9999 }}>
-              <div className="flex items-center gap-2 rounded-2xl px-3 py-2 pointer-events-auto"
-                   style={{ background: 'rgba(11,12,16,0.92)', backdropFilter: 'blur(12px)', border: '1px solid rgba(233,228,218,0.12)' }}>
-                <div className="w-6 h-6 rounded-lg flex items-center justify-center text-void text-[8px] font-bold font-mono flex-shrink-0"
-                     style={{ background: '#e9e4da' }}>
-                  IST
-                </div>
-                <span className="text-sm font-semibold" style={{ color: '#e9e4da', fontFamily: "'Space Grotesk',sans-serif" }}>
-                  Istanbul Navigator
-                </span>
-              </div>
+        <>
+          {/* Top bar */}
+          <div style={{
+            position: 'absolute', top: 0, left: 0, right: 0, zIndex: 200,
+            padding: '10px 12px',
+            pointerEvents: 'none',
+          }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '8px 12px', borderRadius: 16,
+              background: 'rgba(11,12,16,0.92)', backdropFilter: 'blur(14px)',
+              border: '1px solid rgba(233,228,218,0.12)',
+              pointerEvents: 'auto',
+            }}>
+              <div style={{
+                width: 24, height: 24, borderRadius: 7, background: '#e9e4da',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 8, fontWeight: 700, fontFamily: 'monospace', color: '#050506', flexShrink: 0,
+              }}>IST</div>
+              <span style={{ fontSize: 14, fontWeight: 600, color: '#e9e4da', fontFamily: "'Space Grotesk',sans-serif" }}>
+                Istanbul Navigator
+              </span>
             </div>
           </div>
 
-          {mobileDrawerOpen && store.activePanel !== 'none' && (
-            <div className="flex flex-col flex-shrink-0"
-                 style={{ height: store.activePanel === 'route' ? '48vh' : '52vh', maxHeight: '65vh', background: '#0b0c10', borderTop: '1px solid rgba(233,228,218,0.12)' }}>
-              <div className="flex items-center justify-between px-4 py-3 flex-shrink-0"
-                   style={{ borderBottom: '1px solid rgba(233,228,218,0.10)' }}>
-                <span className="text-sm font-semibold" style={{ color: '#e9e4da', fontFamily: "'Space Grotesk',sans-serif" }}>
-                  {NAV_ITEMS.find((n) => n.id === store.activePanel)?.label}
-                </span>
-                <button
-                  onClick={closePanel}
-                  className="w-7 h-7 rounded-full flex items-center justify-center transition-colors"
-                  style={{ background: 'rgba(233,228,218,0.08)', color: '#6d727b' }}
-                >
-                  <IconX size={13} strokeWidth={2.5} />
-                </button>
-              </div>
-              <div className="flex-1 min-h-0 overflow-y-auto">{renderPanel()}</div>
-            </div>
-          )}
+          {/* Map overlays */}
+          <ZoomControls map={mapInstance} />
+          <Notification notification={store.notification} />
+          <MapHints activePanel={store.activePanel} routeFrom={store.routeFrom} routeTo={store.routeTo} activeEndpoint={activeEndpoint} isMobile sheetState={sheetState} />
 
-          <nav
-            className="flex items-center justify-around px-1 flex-shrink-0 z-20"
-            style={{
-              background:   '#0b0c10',
-              borderTop:    '1px solid rgba(233,228,218,0.10)',
-              paddingTop:   '8px',
-              paddingBottom: 'max(env(safe-area-inset-bottom,0px),10px)',
-            }}
-          >
+          {/* ── Bottom sheet ─────────────────────────────────────────────────
+              Overlays the map. Does NOT affect map container size, so
+              Leaflet stays fully rendered behind it at all times.
+          ─────────────────────────────────────────────────────────────────── */}
+          <div style={{
+            position: 'absolute', left: 0, right: 0, bottom: 52, // above tab bar
+            height: sheetState === 'hidden' ? 0 : SHEET_H[sheetState],
+            maxHeight: '85vh',
+            background: '#0b0c10',
+            borderTop: '2px solid rgba(233,228,218,0.10)',
+            borderRadius: '20px 20px 0 0',
+            zIndex: 150,
+            overflow: 'hidden',
+            transition: 'height 0.3s cubic-bezier(0.4,0,0.2,1)',
+            display: 'flex', flexDirection: 'column',
+            boxShadow: '0 -8px 40px rgba(0,0,0,0.6)',
+          }}>
+            {store.activePanel !== 'none' && sheetState !== 'hidden' && (
+              <>
+                {/* Drag handle + header */}
+                <div
+                  style={{ flexShrink: 0, cursor: 'ns-resize' }}
+                  onClick={() => {
+                    if (sheetState === 'peek') setSheetState('half');
+                    else if (sheetState === 'half') setSheetState('full');
+                    else setSheetState('peek');
+                  }}
+                >
+                  {/* Handle pill */}
+                  <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 4px' }}>
+                    <div style={{ width: 36, height: 4, borderRadius: 2, background: 'rgba(233,228,218,0.18)' }} />
+                  </div>
+                  {/* Title row */}
+                  <div style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '4px 14px 8px',
+                    borderBottom: '1px solid rgba(233,228,218,0.08)',
+                  }}>
+                    <span style={{ fontSize: 15, fontWeight: 700, color: '#e9e4da', fontFamily: "'Space Grotesk',sans-serif" }}>
+                      {NAV_ITEMS.find((n) => n.id === store.activePanel)?.label}
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      {/* Expand/collapse toggle */}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setSheetState(sheetState === 'full' ? 'peek' : 'full'); }}
+                        style={{
+                          width: 28, height: 28, borderRadius: '50%', border: 'none', cursor: 'pointer',
+                          background: 'rgba(233,228,218,0.07)', color: '#6d727b',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: 14, fontFamily: 'monospace',
+                        }}
+                      >
+                        {sheetState === 'full' ? '↓' : '↑'}
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); closePanel(); }}
+                        style={{
+                          width: 28, height: 28, borderRadius: '50%', border: 'none', cursor: 'pointer',
+                          background: 'rgba(233,228,218,0.07)', color: '#6d727b',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        }}
+                      >
+                        <IconX size={13} strokeWidth={2.5} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Scrollable panel content */}
+                <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+                  {renderPanelContent(true)}
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* ── Bottom tab bar ──────────────────────────────────────────────── */}
+          <nav style={{
+            position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 200,
+            background: '#0b0c10', borderTop: '1px solid rgba(233,228,218,0.10)',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-around',
+            paddingTop: 8,
+            paddingBottom: 'max(env(safe-area-inset-bottom,0px),10px)',
+          }}>
             {NAV_ITEMS.map(({ id, Icon, label }) => (
-              <button
-                key={id}
-                onClick={() => togglePanel(id)}
-                className="flex flex-col items-center gap-1 px-3 py-1 rounded-xl transition-all"
-                style={{ color: store.activePanel === id ? '#e9e4da' : '#6d727b', minWidth: '52px' }}
-              >
+              <button key={id} onClick={() => openPanel(id)} style={{
+                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
+                padding: '2px 12px 4px', borderRadius: 12, border: 'none', cursor: 'pointer',
+                background: 'transparent',
+                color: store.activePanel === id ? '#e9e4da' : '#6d727b',
+                minWidth: 52,
+              }}>
                 <Icon size={20} />
-                <span className="text-[10px] font-medium font-mono">{label}</span>
+                <span style={{ fontSize: 10, fontFamily: 'monospace', fontWeight: 500 }}>{label}</span>
               </button>
             ))}
           </nav>
-        </div>
+        </>
       )}
     </div>
   );
 }
 
-// ── Sub-components ────────────────────────────────────────────────────────────
+// ── MapHints ──────────────────────────────────────────────────────────────────
 
 interface MapHintsProps {
-  activePanel: ActivePanel;
-  routeFrom: LatLng | null;
-  routeTo:   LatLng | null;
+  activePanel:    ActivePanel;
+  routeFrom:      LatLng | null;
+  routeTo:        LatLng | null;
   activeEndpoint: 'A' | 'B' | null;
+  isMobile:       boolean;
+  sheetState?:    string;
 }
 
-function MapHints({ activePanel, routeFrom, routeTo, activeEndpoint }: MapHintsProps) {
+function MapHints({ activePanel, routeFrom, routeTo, activeEndpoint, isMobile, sheetState }: MapHintsProps) {
+  // On mobile, hide hint when sheet is full (map is mostly hidden anyway)
+  if (isMobile && sheetState === 'full') return null;
+
   let hint = '';
   if (activePanel === 'route') {
-    if (!routeFrom)         hint = 'Click the map to place start point A';
-    else if (!routeTo)      hint = 'Click the map to place destination B';
-    else if (activeEndpoint === 'A') hint = 'Click to move start point A';
-    else if (activeEndpoint === 'B') hint = 'Click to move destination B';
-    else                    hint = 'Drag A or B pins to adjust the route';
+    if (!routeFrom)                   hint = 'Tap map to place start point A';
+    else if (!routeTo)                hint = 'Tap map to place destination B';
+    else if (activeEndpoint === 'A')  hint = 'Tap to move start point A';
+    else if (activeEndpoint === 'B')  hint = 'Tap to move destination B';
+    else                              hint = 'Drag A or B pins to adjust route';
   } else {
-    hint = 'Double-click or right-click to drop a pin';
+    hint = 'Double-tap or long-press to drop a pin';
   }
 
+  // On mobile, position hint just above the bottom sheet
+  const bottomOffset = isMobile
+    ? (sheetState === 'hidden' ? '66px' : sheetState === 'peek' ? '218px' : '50vh')
+    : '24px';
+
   return (
-    <div className="absolute bottom-4 left-1/2 -translate-x-1/2 pointer-events-none px-3 w-full flex justify-center" style={{ zIndex: 9999 }}>
-      <div
-        className="rounded-full px-4 py-2 text-xs text-center whitespace-nowrap max-w-xs"
-        style={{
-          background:   'rgba(11,12,16,0.88)',
-          backdropFilter: 'blur(10px)',
-          border:       '1px solid rgba(233,228,218,0.12)',
-          color:        '#6d727b',
-          fontFamily:   "'JetBrains Mono',monospace",
-          letterSpacing: '0.02em',
-        }}
-      >
+    <div style={{
+      position: 'absolute', bottom: bottomOffset, left: 0, right: 0,
+      display: 'flex', justifyContent: 'center', pointerEvents: 'none',
+      zIndex: 140, transition: 'bottom 0.3s ease', padding: '0 16px',
+    }}>
+      <div style={{
+        padding: '6px 16px', borderRadius: 100,
+        background: 'rgba(11,12,16,0.88)', backdropFilter: 'blur(10px)',
+        border: '1px solid rgba(233,228,218,0.12)',
+        color: '#6d727b', fontSize: 11,
+        fontFamily: "'JetBrains Mono',monospace", letterSpacing: '0.02em',
+        whiteSpace: 'nowrap',
+      }}>
         {hint}
       </div>
     </div>
   );
 }
 
-// ── Live location marker helpers ──────────────────────────────────────────────
+// ── Live location pulse CSS ────────────────────────────────────────────────────
 
-/** Injects the pulse keyframe once into the document head. */
 function ensurePulseStyle() {
   if (document.getElementById('ist-pulse-style')) return;
   const s = document.createElement('style');
@@ -477,12 +532,10 @@ function ensurePulseStyle() {
   s.textContent = `
     @keyframes ist-pulse {
       0%   { transform: scale(1);   opacity: 0.55; }
-      70%  { transform: scale(2.6); opacity: 0;    }
-      100% { transform: scale(2.6); opacity: 0;    }
+      70%  { transform: scale(2.8); opacity: 0;    }
+      100% { transform: scale(2.8); opacity: 0;    }
     }
-    .ist-location-pulse {
-      animation: ist-pulse 2s ease-out infinite;
-    }
+    .ist-loc-pulse { animation: ist-pulse 2s ease-out infinite; }
   `;
   document.head.appendChild(s);
 }
@@ -490,28 +543,12 @@ function ensurePulseStyle() {
 function createLocationIcon(): L.DivIcon {
   ensurePulseStyle();
   return L.divIcon({
-    className: '',
-    iconAnchor: [12, 12],
-    iconSize:   [24, 24],
-    html: `
-      <div style="position:relative;width:24px;height:24px;">
-        <!-- pulse ring -->
-        <div class="ist-location-pulse" style="
-          position:absolute;inset:0;border-radius:50%;
-          background:rgba(45,212,191,0.35);
-        "></div>
-        <!-- white halo -->
-        <div style="
-          position:absolute;inset:2px;border-radius:50%;
-          background:#fff;
-          box-shadow:0 0 0 1.5px rgba(45,212,191,0.6), 0 2px 8px rgba(0,0,0,0.55);
-        "></div>
-        <!-- teal dot -->
-        <div style="
-          position:absolute;inset:5px;border-radius:50%;
-          background:#2dd4bf;
-        "></div>
-      </div>`,
+    className: '', iconAnchor: [12, 12], iconSize: [24, 24],
+    html: `<div style="position:relative;width:24px;height:24px;">
+      <div class="ist-loc-pulse" style="position:absolute;inset:0;border-radius:50%;background:rgba(45,212,191,0.3);"></div>
+      <div style="position:absolute;inset:2px;border-radius:50%;background:#fff;box-shadow:0 0 0 1.5px rgba(45,212,191,0.7),0 2px 8px rgba(0,0,0,0.5);"></div>
+      <div style="position:absolute;inset:5px;border-radius:50%;background:#2dd4bf;"></div>
+    </div>`,
   });
 }
 
@@ -519,154 +556,75 @@ function createLocationIcon(): L.DivIcon {
 
 function ZoomControls({ map }: { map: MapView }) {
   const leafletMap = map.getMap();
+  const [tracking, setTracking] = React.useState(false);
+  const [hasError,  setHasError]  = React.useState(false);
+  const watchIdRef        = React.useRef<number | null>(null);
+  const markerRef         = React.useRef<L.Marker | null>(null);
+  const circleRef         = React.useRef<L.Circle | null>(null);
+  const hasFlewRef        = React.useRef(false);
 
-  // tracking state
-  const [tracking, setTracking]   = React.useState(false);
-  const [hasError, setHasError]   = React.useState(false);
-  const watchIdRef                = React.useRef<number | null>(null);
-  const locationMarkerRef         = React.useRef<L.Marker | null>(null);
-  const accuracyCircleRef         = React.useRef<L.Circle | null>(null);
-  const hasFlewRef                = React.useRef(false);   // fly only on first fix
-
-  // Clean up marker + circle helpers
-  const clearLocationLayers = React.useCallback(() => {
-    locationMarkerRef.current?.remove();
-    locationMarkerRef.current = null;
-    accuracyCircleRef.current?.remove();
-    accuracyCircleRef.current = null;
+  const clearLayers = React.useCallback(() => {
+    markerRef.current?.remove(); markerRef.current = null;
+    circleRef.current?.remove(); circleRef.current = null;
   }, []);
 
-  // Stop watching GPS
   const stopTracking = React.useCallback(() => {
-    if (watchIdRef.current !== null) {
-      navigator.geolocation.clearWatch(watchIdRef.current);
-      watchIdRef.current = null;
-    }
-    clearLocationLayers();
-    hasFlewRef.current = false;
-    setTracking(false);
-    setHasError(false);
-  }, [clearLocationLayers]);
+    if (watchIdRef.current !== null) { navigator.geolocation.clearWatch(watchIdRef.current); watchIdRef.current = null; }
+    clearLayers(); hasFlewRef.current = false;
+    setTracking(false); setHasError(false);
+  }, [clearLayers]);
 
-  // Start/update GPS watch
   const startTracking = React.useCallback(() => {
-    if (!leafletMap) return;
-    if (!navigator.geolocation) {
-      setHasError(true);
-      return;
-    }
-
-    setHasError(false);
-    setTracking(true);
-    hasFlewRef.current = false;
+    if (!leafletMap || !navigator.geolocation) { setHasError(true); return; }
+    setHasError(false); setTracking(true); hasFlewRef.current = false;
 
     watchIdRef.current = navigator.geolocation.watchPosition(
-      (pos) => {
-        const { latitude: lat, longitude: lng, accuracy } = pos.coords;
-        const latlng: L.LatLngExpression = [lat, lng];
-
-        // Fly to location on first fix only
+      ({ coords: { latitude: lat, longitude: lng, accuracy } }) => {
+        const ll: L.LatLngExpression = [lat, lng];
         if (!hasFlewRef.current) {
-          leafletMap.flyTo(latlng, Math.min(leafletMap.getZoom(), 16), {
-            duration: 1, easeLinearity: 0.4,
-          });
+          leafletMap.flyTo(ll, Math.min(leafletMap.getZoom(), 16), { duration: 1 });
           hasFlewRef.current = true;
         }
-
-        // Update or create marker
-        if (locationMarkerRef.current) {
-          locationMarkerRef.current.setLatLng(latlng);
-        } else {
-          locationMarkerRef.current = L.marker(latlng, {
-            icon: createLocationIcon(),
-            zIndexOffset: 2000,
-            interactive: false,
-          }).addTo(leafletMap);
-        }
-
-        // Update or create accuracy ring
-        if (accuracyCircleRef.current) {
-          accuracyCircleRef.current.setLatLng(latlng);
-          accuracyCircleRef.current.setRadius(accuracy);
-        } else {
-          accuracyCircleRef.current = L.circle(latlng, {
-            radius: accuracy,
-            color:       '#2dd4bf',
-            fillColor:   '#2dd4bf',
-            fillOpacity: 0.07,
-            weight:      1.5,
-            opacity:     0.35,
-            interactive: false,
-          }).addTo(leafletMap);
-        }
+        if (markerRef.current) markerRef.current.setLatLng(ll);
+        else markerRef.current = L.marker(ll, { icon: createLocationIcon(), zIndexOffset: 2000, interactive: false }).addTo(leafletMap);
+        if (circleRef.current) { circleRef.current.setLatLng(ll); circleRef.current.setRadius(accuracy); }
+        else circleRef.current = L.circle(ll, { radius: accuracy, color: '#2dd4bf', fillColor: '#2dd4bf', fillOpacity: 0.07, weight: 1.5, opacity: 0.3, interactive: false }).addTo(leafletMap);
       },
-      (_err) => {
-        setHasError(true);
-        setTracking(false);
-        clearLocationLayers();
-      },
+      () => { setHasError(true); setTracking(false); clearLayers(); },
       { enableHighAccuracy: true, timeout: 12000, maximumAge: 2000 },
     );
-  }, [leafletMap, clearLocationLayers]);
+  }, [leafletMap, clearLayers]);
 
-  // Toggle
-  const handleLocate = React.useCallback(() => {
-    if (tracking) stopTracking();
-    else          startTracking();
-  }, [tracking, startTracking, stopTracking]);
-
-  // Cleanup on unmount
   React.useEffect(() => () => stopTracking(), [stopTracking]);
 
-  // ── render ──────────────────────────────────────────────────────────────────
-  const btnStyle: React.CSSProperties = {
-    width: '36px', height: '36px',
-    background:  'rgba(11,12,16,0.92)',
-    border:      '1px solid rgba(233,228,218,0.18)',
-    borderRadius: '10px',
-    color:       '#e9e4da',
-    display:     'flex',
-    alignItems:  'center',
-    justifyContent: 'center',
-    cursor:      'pointer',
-    backdropFilter: 'blur(8px)',
-    boxShadow:   '0 2px 12px rgba(0,0,0,0.5)',
-    transition:  'background 0.15s, border-color 0.15s, color 0.15s',
-  };
-
-  const locateBtnStyle: React.CSSProperties = {
-    ...btnStyle,
-    marginTop: '4px',
-    // Active state: teal border + tinted background + teal icon
-    ...(tracking ? {
-      border:     '1px solid rgba(45,212,191,0.55)',
-      background: 'rgba(45,212,191,0.10)',
-      color:      '#2dd4bf',
-      boxShadow:  '0 0 0 1px rgba(45,212,191,0.2), 0 2px 12px rgba(0,0,0,0.5)',
-    } : {}),
-    ...(hasError ? {
-      border:     '1px solid rgba(244,63,94,0.45)',
-      background: 'rgba(244,63,94,0.08)',
-      color:      '#f43f5e',
-    } : {}),
+  const btn: React.CSSProperties = {
+    width: 36, height: 36, borderRadius: 10, border: '1px solid rgba(233,228,218,0.18)',
+    background: 'rgba(11,12,16,0.92)', backdropFilter: 'blur(8px)',
+    color: '#e9e4da', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    cursor: 'pointer', boxShadow: '0 2px 12px rgba(0,0,0,0.5)',
+    transition: 'background 0.15s, border-color 0.15s, color 0.15s',
   };
 
   return (
-    <div className="absolute top-16 right-3 flex flex-col gap-1.5" style={{ zIndex: 9999 }}>
-      <button style={btnStyle} onClick={() => leafletMap?.zoomIn()}
-        onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(233,228,218,0.1)')}
-        onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(11,12,16,0.92)')}>
+    <div style={{ position: 'absolute', top: 64, right: 12, display: 'flex', flexDirection: 'column', gap: 6, zIndex: 190 }}>
+      <button style={btn} onClick={() => leafletMap?.zoomIn()}
+        onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(233,228,218,0.1)'; }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(11,12,16,0.92)'; }}>
         <IconZoomIn size={16} />
       </button>
-      <button style={btnStyle} onClick={() => leafletMap?.zoomOut()}
-        onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(233,228,218,0.1)')}
-        onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(11,12,16,0.92)')}>
+      <button style={btn} onClick={() => leafletMap?.zoomOut()}
+        onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(233,228,218,0.1)'; }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(11,12,16,0.92)'; }}>
         <IconZoomOut size={16} />
       </button>
       <button
-        style={locateBtnStyle}
-        onClick={handleLocate}
-        title={tracking ? 'Stop tracking location' : hasError ? 'Location unavailable' : 'Track my location'}
+        style={{
+          ...btn, marginTop: 4,
+          ...(tracking ? { border: '1px solid rgba(45,212,191,0.55)', background: 'rgba(45,212,191,0.10)', color: '#2dd4bf', boxShadow: '0 0 0 1px rgba(45,212,191,0.2),0 2px 12px rgba(0,0,0,0.5)' } : {}),
+          ...(hasError  ? { border: '1px solid rgba(244,63,94,0.45)',  background: 'rgba(244,63,94,0.08)',  color: '#f43f5e' } : {}),
+        }}
+        onClick={() => tracking ? stopTracking() : startTracking()}
+        title={tracking ? 'Stop tracking' : hasError ? 'Location unavailable' : 'Track my location'}
       >
         <IconLocate size={15} />
       </button>
@@ -674,18 +632,23 @@ function ZoomControls({ map }: { map: MapView }) {
   );
 }
 
+// ── Notification ──────────────────────────────────────────────────────────────
+
 function Notification({ notification }: { notification: AppState['notification'] | null | undefined }) {
   if (!notification) return null;
-  const styles: Record<string, React.CSSProperties> = {
-    success: { borderColor: '#2dd4bf', background: 'rgba(45,212,191,0.08)', color: '#2dd4bf' },
-    error:   { borderColor: '#f43f5e', background: 'rgba(244,63,94,0.08)',  color: '#f43f5e' },
+  const s: Record<string, React.CSSProperties> = {
+    success: { borderColor: '#2dd4bf', background: 'rgba(45,212,191,0.08)',  color: '#2dd4bf' },
+    error:   { borderColor: '#f43f5e', background: 'rgba(244,63,94,0.08)',   color: '#f43f5e' },
     info:    { borderColor: 'rgba(233,228,218,0.2)', background: 'rgba(233,228,218,0.05)', color: '#9a9d95' },
   };
   return (
-    <div
-      className="absolute top-16 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap"
-      style={{ border: '1px solid', boxShadow: '0 4px 20px rgba(0,0,0,0.5)', fontFamily: "'JetBrains Mono',monospace", fontSize: '12px', letterSpacing: '0.02em', zIndex: 9999, ...styles[notification.type] }}
-    >
+    <div style={{
+      position: 'absolute', top: 64, left: '50%', transform: 'translateX(-50%)',
+      padding: '6px 16px', borderRadius: 100, border: '1px solid',
+      fontFamily: "'JetBrains Mono',monospace", fontSize: 12, letterSpacing: '0.02em',
+      whiteSpace: 'nowrap', zIndex: 9999,
+      boxShadow: '0 4px 20px rgba(0,0,0,0.5)', ...s[notification.type],
+    }}>
       {notification.message}
     </div>
   );
