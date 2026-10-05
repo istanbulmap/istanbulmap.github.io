@@ -51,13 +51,12 @@ type RouteStyle = {
 };
 
 const MODE_STYLE: Record<TransportMode, RouteStyle> = {
-  walking:   { color: '#22c55e', weight: 4,  opacity: 0.95, dashArray: '8 10',  lineCap: 'round',  lineJoin: 'round' },
-  car:       { color: '#f43f5e', weight: 4,  opacity: 0.90, lineCap: 'round',   lineJoin: 'round' },
-  metro:     { color: '#4f4ef1', weight: 6,  opacity: 0.95, lineCap: 'round',   lineJoin: 'round' },
-  tram:      { color: '#f59e0b', weight: 4,  opacity: 0.90, dashArray: '14 5',  lineCap: 'square', lineJoin: 'round' },
-  bus:       { color: '#f97316', weight: 4,  opacity: 0.88, lineCap: 'round',   lineJoin: 'round' },
-  ferry:     { color: '#06b6d4', weight: 4,  opacity: 0.85, dashArray: '8 10',  lineCap: 'round',  lineJoin: 'round' },
-  funicular: { color: '#8b5cf6', weight: 3,  opacity: 0.85, dashArray: '3 7',   lineCap: 'round',  lineJoin: 'round' },
+  walking:   { color: '#22c55e', weight: 4, opacity: 0.95, dashArray: '8 10',  lineCap: 'round', lineJoin: 'round' },
+  metro:     { color: '#4f4ef1', weight: 6, opacity: 0.95, lineCap: 'round',  lineJoin: 'round' },
+  tram:      { color: '#f59e0b', weight: 4, opacity: 0.9,  dashArray: '14 5', lineCap: 'square', lineJoin: 'round' },
+  bus:       { color: '#f97316', weight: 4, opacity: 0.88, lineCap: 'round',  lineJoin: 'round' },
+  ferry:     { color: '#06b6d4', weight: 4, opacity: 0.85, dashArray: '8 10', lineCap: 'round',  lineJoin: 'round' },
+  funicular: { color: '#8b5cf6', weight: 3, opacity: 0.85, dashArray: '3 7',  lineCap: 'round',  lineJoin: 'round' },
 };
 
 // ── OSRM ─────────────────────────────────────────────────────────────────────
@@ -74,33 +73,36 @@ function isValidLatLng(p: LatLng): boolean {
 }
 
 /**
- * Fetch a route from OSRM.
+ * Validate that a LatLng has finite, real-number coordinates before use.
+ */
+function isValidLatLng(p: LatLng): boolean {
+  return (
+    p != null &&
+    typeof p.lat === 'number' && isFinite(p.lat) &&
+    typeof p.lng === 'number' && isFinite(p.lng)
+  );
+}
+
+/**
+ * Fetch a route from the OSRM public API.
+ * Uses `foot` profile for walking (true pedestrian paths) and
+ * `driving` for vehicle-based modes.
  *
- * Walking: uses the `foot` profile which routes via pedestrian
- * paths, footways, and crossings — never motorways or car roads.
- * We add `&annotations=false` and request `exclude=motorway` where
- * supported so the demo server picks pedestrian-friendly segments.
- *
- * Car: uses the `driving` profile.
+ * FIX: The original code was occasionally called with NaN-coordinate
+ * waypoints from transit waypoint helpers.  We validate every point
+ * before building the URL so OSRM never receives a malformed request.
  */
 async function fetchOSRM(
   waypoints: LatLng[],
   profile: 'foot' | 'driving',
   signal: AbortSignal,
 ): Promise<L.LatLngExpression[] | null> {
+  // Guard: drop invalid points, bail if we have fewer than 2 remaining
   const valid = waypoints.filter(isValidLatLng);
   if (valid.length < 2) return null;
 
   const coords = valid.map((p) => `${p.lng},${p.lat}`).join(';');
-
-  // For foot profile: ask for alternatives=false and steps=false to keep response small.
-  // The foot profile on the public OSRM demo server already avoids motorways by design.
-  const extras = profile === 'foot'
-    ? '&alternatives=false&steps=false&annotations=false'
-    : '&alternatives=false&steps=false';
-
-  const url = `https://router.project-osrm.org/route/v1/${profile}/${coords}?overview=full&geometries=geojson${extras}`;
-
+  const url = `https://router.project-osrm.org/route/v1/${profile}/${coords}?overview=full&geometries=geojson`;
   try {
     const res  = await fetch(url, { signal });
     if (!res.ok) return null;
@@ -112,12 +114,21 @@ async function fetchOSRM(
   } catch { return null; }
 }
 
+/**
+ * Build the geometry for each transport mode.
+ *
+ * Walking always uses OSRM foot — this routes via actual pedestrian
+ * paths, crossings, and footways, NOT via car roads.
+ *
+ * Other modes use driving or composited segments as before.
+ */
 async function buildGeometry(
   from: LatLng,
   to: LatLng,
   mode: TransportMode,
   signal: AbortSignal,
 ): Promise<L.LatLngExpression[][]> {
+  // Validate from/to before any async work
   if (!isValidLatLng(from) || !isValidLatLng(to)) {
     return [[[from?.lat ?? 0, from?.lng ?? 0], [to?.lat ?? 0, to?.lng ?? 0]]];
   }
@@ -129,13 +140,8 @@ async function buildGeometry(
     // ── Pedestrian — strictly foot profile, no car roads ────────────────────
     case 'walking':
     case 'funicular': {
+      // Strict foot-routed pedestrian path — never driving profile
       const pts = await fetchOSRM([from, to], 'foot', signal);
-      return pts ? [pts] : fallback;
-    }
-
-    // ── Car — driving profile ────────────────────────────────────────────────
-    case 'car': {
-      const pts = await fetchOSRM([from, to], 'driving', signal);
       return pts ? [pts] : fallback;
     }
 
@@ -172,7 +178,7 @@ async function buildGeometry(
       const underground: L.LatLngExpression[] = [
         [entry.lat, entry.lng],
         ...middle.filter(isValidLatLng).map((s): L.LatLngExpression => [s.lat, s.lng]),
-        [exit.lat, exit.lng],
+        [exit.lat,  exit.lng],
       ];
 
       const segments: L.LatLngExpression[][] = [];
@@ -187,7 +193,9 @@ async function buildGeometry(
       const fromTerminal = nearestPoint(from, FERRY_TERMINALS);
       const toTerminal   = nearestPoint(to,   FERRY_TERMINALS);
 
-      if (!isValidLatLng(fromTerminal) || !isValidLatLng(toTerminal)) return fallback;
+      if (!isValidLatLng(fromTerminal) || !isValidLatLng(toTerminal)) {
+        return fallback;
+      }
 
       const [walkToPort, walkFromPort] = await Promise.all([
         fetchOSRM([from, fromTerminal], 'foot', signal),
@@ -348,6 +356,9 @@ export class MapView {
     if (!this.map || !this.routeLayer) return;
     if (!isValidLatLng(from) || !isValidLatLng(to)) return;
 
+    // FIX: Guard against invalid coordinates — these cause the NaN LatLng error
+    if (!isValidLatLng(from) || !isValidLatLng(to)) return;
+
     currentAbortController?.abort();
     currentAbortController = new AbortController();
     const { signal } = currentAbortController;
@@ -363,10 +374,9 @@ export class MapView {
       const allBounds: L.LatLngExpression[] = [];
 
       segments.forEach((coords, idx) => {
-        const isTransitWalk =
-          (mode === 'metro' || mode === 'ferry') &&
-          (idx === 0 || idx === segments.length - 1) &&
-          segments.length > 1;
+        const isMetroWalk = mode === 'metro' && (idx === 0 || idx === segments.length - 1) && segments.length > 1;
+        const isFerryWalk = mode === 'ferry' && (idx === 0 || idx === segments.length - 1) && segments.length > 1;
+        const isTransitWalk = isMetroWalk || isFerryWalk;
 
         const segStyle: RouteStyle = isTransitWalk
           ? { color: '#22c55e', weight: 2, opacity: 0.75, dashArray: '4 7', lineCap: 'round', lineJoin: 'round' }
@@ -406,11 +416,20 @@ export class MapView {
     this.routeLayer?.clearLayers();
   }
 
+  /**
+   * FIX: The original flyTo() called map.flyTo() even when the map
+   * container had zero size (e.g., on first render before layout),
+   * which made Leaflet's unproject() return NaN coordinates.
+   * We now check that the container has a real size first.
+   */
   flyTo(center: LatLng, zoom?: number) {
     if (!this.map) return;
     if (!isValidLatLng(center)) return;
+
+    // Guard: container must have been laid out (non-zero size)
     const container = this.map.getContainer();
     if (!container || container.clientWidth === 0 || container.clientHeight === 0) return;
+
     this.map.flyTo([center.lat, center.lng], zoom ?? this.map.getZoom(), {
       duration: 0.9, easeLinearity: 0.5,
     });

@@ -1,5 +1,21 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="8" fill="#1a1f2e"/>
-  <path d="M16 5C10.477 5 6 9.477 6 15c0 7.333 10 17 10 17s10-9.667 10-17c0-5.523-4.477-10-10-10z" fill="#4f4ef1"/>
-  <circle cx="16" cy="15" r="4" fill="white" opacity="0.9"/>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%"  stop-color="#0d0e13"/>
+      <stop offset="100%" stop-color="#050506"/>
+    </linearGradient>
+    <linearGradient id="pin" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#2dd4bf"/>
+      <stop offset="100%" stop-color="#4f4ef1"/>
+    </linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="7" fill="url(#bg)"/>
+  <!-- map grid lines, very faint -->
+  <line x1="0" y1="16" x2="32" y2="16" stroke="rgba(233,228,218,0.06)" stroke-width="0.5"/>
+  <line x1="16" y1="0" x2="16" y2="32" stroke="rgba(233,228,218,0.06)" stroke-width="0.5"/>
+  <!-- pin -->
+  <path d="M16 5C12.134 5 9 8.134 9 12C9 17.25 16 24 16 24C16 24 23 17.25 23 12C23 8.134 19.866 5 16 5Z"
+        fill="url(#pin)"/>
+  <circle cx="16" cy="12" r="3.2" fill="white" opacity="0.92"/>
+  <circle cx="16" cy="12" r="1.5" fill="#2dd4bf"/>
 </svg>

@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 340" width="1200" height="340">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#050506"/>
+      <stop offset="50%" style="stop-color:#0b0c10"/>
+      <stop offset="100%" style="stop-color:#111318"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#2dd4bf;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#4f4ef1;stop-opacity:1"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#4f4ef1;stop-opacity:0.18"/>
+      <stop offset="100%" style="stop-color:#2dd4bf;stop-opacity:0.06"/>
+    </linearGradient>
+    <filter id="blur1">
+      <feGaussianBlur stdDeviation="38"/>
+    </filter>
+    <filter id="blur2">
+      <feGaussianBlur stdDeviation="22"/>
+    </filter>
+    <filter id="grain">
+      <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="3" stitchTiles="stitch" result="noise"/>
+      <feColorMatrix type="saturate" values="0" in="noise" result="grayNoise"/>
+      <feBlend in="SourceGraphic" in2="grayNoise" mode="overlay" result="blend"/>
+      <feComposite in="blend" in2="SourceGraphic" operator="in"/>
+    </filter>
+    <clipPath id="rounded">
+      <rect width="1200" height="340" rx="16"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#rounded)">
+    <!-- Background -->
+    <rect width="1200" height="340" fill="url(#bg)"/>
+
+    <!-- Glow orbs -->
+    <ellipse cx="200" cy="160" rx="280" ry="200" fill="#4f4ef1" opacity="0.09" filter="url(#blur1)"/>
+    <ellipse cx="950" cy="130" rx="220" ry="160" fill="#2dd4bf" opacity="0.07" filter="url(#blur1)"/>
+    <ellipse cx="600" cy="300" rx="300" ry="120" fill="#8b5cf6" opacity="0.05" filter="url(#blur2)"/>
+
+    <!-- Grid lines -->
+    <g opacity="0.04" stroke="#e9e4da" stroke-width="0.5">
+      <line x1="0" y1="68" x2="1200" y2="68"/>
+      <line x1="0" y1="136" x2="1200" y2="136"/>
+      <line x1="0" y1="204" x2="1200" y2="204"/>
+      <line x1="0" y1="272" x2="1200" y2="272"/>
+      <line x1="150" y1="0" x2="150" y2="340"/>
+      <line x1="300" y1="0" x2="300" y2="340"/>
+      <line x1="450" y1="0" x2="450" y2="340"/>
+      <line x1="600" y1="0" x2="600" y2="340"/>
+      <line x1="750" y1="0" x2="750" y2="340"/>
+      <line x1="900" y1="0" x2="900" y2="340"/>
+      <line x1="1050" y1="0" x2="1050" y2="340"/>
+    </g>
+
+    <!-- Decorative map pin shapes (right side) -->
+    <g opacity="0.12">
+      <path d="M980 60 C980 38 998 20 1020 20 C1042 20 1060 38 1060 60 C1060 85 1020 115 1020 115 S980 85 980 60Z" fill="#2dd4bf"/>
+      <circle cx="1020" cy="60" r="10" fill="#050506" opacity="0.6"/>
+    </g>
+    <g opacity="0.07">
+      <path d="M1080 140 C1080 124 1093 110 1109 110 C1125 110 1138 124 1138 140 C1138 158 1109 178 1109 178 S1080 158 1080 140Z" fill="#4f4ef1"/>
+      <circle cx="1109" cy="140" r="8" fill="#050506" opacity="0.6"/>
+    </g>
+    <g opacity="0.06">
+      <path d="M910 200 C910 188 920 178 932 178 C944 178 954 188 954 200 C954 214 932 228 932 228 S910 214 910 200Z" fill="#f59e0b"/>
+      <circle cx="932" cy="200" r="7" fill="#050506" opacity="0.6"/>
+    </g>
+    <!-- Route line decoration -->
+    <path d="M932 228 Q960 255 1020 240 Q1075 225 1109 178" stroke="#2dd4bf" stroke-width="1.5" fill="none" stroke-dasharray="5 5" opacity="0.15"/>
+
+    <!-- Left side: IST badge -->
+    <rect x="80" y="110" width="52" height="52" rx="14" fill="#e9e4da" opacity="0.95"/>
+    <text x="106" y="143" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="700" fill="#050506" letter-spacing="0.5">IST</text>
+
+    <!-- Main title -->
+    <text x="152" y="152" font-family="Fraunces, Georgia, serif" font-size="52" font-weight="300" fill="#e9e4da" letter-spacing="-0.5">Istanbul</text>
+    <text x="152" y="207" font-family="Fraunces, Georgia, serif" font-size="52" font-weight="300" fill="url(#accent)" letter-spacing="-0.5">Navigator</text>
+
+    <!-- Subtitle -->
+    <text x="152" y="242" font-family="Space Grotesk, system-ui, sans-serif" font-size="15" font-weight="300" fill="#9a9d95" letter-spacing="0.02em">Offline-capable map, routing and travel companion for Istanbul, Turkey</text>
+
+    <!-- Accent line -->
+    <rect x="152" y="258" width="280" height="1.5" rx="1" fill="url(#accent)" opacity="0.5"/>
+
+    <!-- Tech stack pills -->
+    <g font-family="JetBrains Mono, monospace" font-size="11" letter-spacing="0.08em">
+      <rect x="152" y="272" width="68" height="22" rx="11" fill="rgba(79,78,241,0.15)" stroke="rgba(79,78,241,0.4)" stroke-width="1"/>
+      <text x="186" y="287" text-anchor="middle" fill="#8b8ef5">React</text>
+
+      <rect x="228" y="272" width="82" height="22" rx="11" fill="rgba(45,212,191,0.1)" stroke="rgba(45,212,191,0.35)" stroke-width="1"/>
+      <text x="269" y="287" text-anchor="middle" fill="#2dd4bf">TypeScript</text>
+
+      <rect x="318" y="272" width="68" height="22" rx="11" fill="rgba(233,228,218,0.07)" stroke="rgba(233,228,218,0.2)" stroke-width="1"/>
+      <text x="352" y="287" text-anchor="middle" fill="#9a9d95">Leaflet</text>
+
+      <rect x="394" y="272" width="60" height="22" rx="11" fill="rgba(139,92,246,0.12)" stroke="rgba(139,92,246,0.35)" stroke-width="1"/>
+      <text x="424" y="287" text-anchor="middle" fill="#a78bfa">Vite</text>
+    </g>
+
+    <!-- Border -->
+    <rect width="1200" height="340" rx="16" fill="none" stroke="rgba(233,228,218,0.10)" stroke-width="1"/>
+  </g>
+</svg>
