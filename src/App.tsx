@@ -241,6 +241,7 @@ export default function App() {
             setRouteToLabel={store.setRouteToLabel}
             activeEndpoint={activeEndpoint}
             onSetActiveEndpoint={setActiveEndpoint}
+            compact={isMobile}
           />
         );
       case 'pins':
