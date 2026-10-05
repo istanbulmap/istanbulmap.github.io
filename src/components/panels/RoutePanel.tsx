@@ -64,6 +64,10 @@ const RoutePanelComponent: React.FC<RoutePanelProps> = ({
   const [selectedMode, setSelectedMode] = useState<TransportMode>(routeMode);
   const [expandedRoute, setExpandedRoute] = useState<TransportMode | null>(null);
 
+  // GPS-fill state for A
+  const [locLoading, setLocLoading] = useState(false);
+  const [locError,   setLocError]   = useState(false);
+
   const routeOptions = useMemo(() => {
     if (!routeFrom || !routeTo) return [];
     return computeRouteOptions(routeFrom, routeTo);
@@ -517,8 +521,10 @@ const RoutePanelComponent: React.FC<RoutePanelProps> = ({
               </div>
             ))}
           </div>
-        </div>
-      )}
+        )}
+      </div>
+    );
+  }
 
       {/* ── Saved routes ─────────────────────────────────────────────── */}
       {state.data.savedRoutes.length > 0 && (
@@ -526,8 +532,8 @@ const RoutePanelComponent: React.FC<RoutePanelProps> = ({
           <span style={{ ...labelTag, marginBottom: '8px' }}>Saved</span>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '112px', overflowY: 'auto' }}>
             {state.data.savedRoutes.map((route) => {
-              const cfg  = TRANSPORT_CONFIG[route.mode];
-              const Icon = TRANSPORT_ICONS[route.mode];
+              const cfg  = TC[route.mode];
+              const Icon = cfg.Icon;
               return (
                 <div key={route.id} style={{
                   display: 'flex', alignItems: 'center', gap: '8px',

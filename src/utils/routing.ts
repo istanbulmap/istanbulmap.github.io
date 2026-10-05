@@ -13,7 +13,6 @@ function toRad(deg: number): number {
   return (deg * Math.PI) / 180;
 }
 
-// Istanbul bounding box
 const ISTANBUL_BOUNDS = {
   minLat: 40.8, maxLat: 41.3,
   minLng: 28.5, maxLng: 29.5,
@@ -28,9 +27,9 @@ export function isInIstanbul(pos: LatLng): boolean {
   );
 }
 
-// Approximate walk speed 5 km/h, various transit speeds
 const SPEED_KMH: Record<TransportMode, number> = {
   walking:   5,
+  car:       35,   // city average with traffic
   bus:       18,
   metro:     40,
   tram:      20,
@@ -38,9 +37,9 @@ const SPEED_KMH: Record<TransportMode, number> = {
   funicular: 10,
 };
 
-// Penalty minutes for waiting + boarding per mode
 const BOARDING_MIN: Record<TransportMode, number> = {
   walking:   0,
+  car:       2,    // minimal — already in your car
   bus:       7,
   metro:     5,
   tram:      6,
@@ -53,37 +52,39 @@ export interface RouteOption extends RouteResult {
   reason?: string;
 }
 
-// Istanbul metro lines (M1-M12 + Marmaray + funicular)
 const METRO_LINES = [
-  { id: 'M1', name: 'M1 Aksaray - Airport (old)', color: '#e63946' },
-  { id: 'M2', name: 'M2 Yenikiapi - Haciosman', color: '#2a9d8f' },
-  { id: 'M3', name: 'M3 Kirazli - Olimpiyat', color: '#e9c46a' },
-  { id: 'M4', name: 'M4 Kadikoy - Sabiha Gokcen', color: '#f4a261' },
-  { id: 'M5', name: 'M5 Üsküdar - Cekmekoy', color: '#264653' },
-  { id: 'M6', name: 'M6 Levent - Bogazici', color: '#6a0572' },
-  { id: 'M7', name: 'M7 Mecidiyekoy - Mahmutbey', color: '#0077b6' },
-  { id: 'M9', name: 'M9 Atakoy - Ikitelli', color: '#023e8a' },
-  { id: 'M11', name: 'M11 Gayrettepe - Airport', color: '#00b4d8' },
-  { id: 'Marmaray', name: 'Marmaray (Bosphorus Tunnel)', color: '#9b2226' },
+  { id: 'M1',       name: 'M1 Aksaray - Atatürk Airport'    },
+  { id: 'M2',       name: 'M2 Yenikiapi - Haciosman'        },
+  { id: 'M3',       name: 'M3 Kirazli - Olimpiyat'          },
+  { id: 'M4',       name: 'M4 Kadikoy - Sabiha Gökcen'      },
+  { id: 'M5',       name: 'M5 Üsküdar - Çekmeköy'           },
+  { id: 'M6',       name: 'M6 Levent - Bogazici'            },
+  { id: 'M7',       name: 'M7 Mecidiyeköy - Mahmutbey'      },
+  { id: 'M9',       name: 'M9 Ataköy - Ikitelli'            },
+  { id: 'M11',      name: 'M11 Gayrettepe - Istanbul Airport'},
+  { id: 'Marmaray', name: 'Marmaray (Bosphorus Tunnel)'      },
 ];
 
 const TRAM_LINES = [
-  { id: 'T1', name: 'T1 Kabatas - Bagcilar', color: '#e76f51' },
-  { id: 'T3', name: 'T3 Kadikoy - Moda', color: '#457b9d' },
+  { id: 'T1', name: 'T1 Kabataş - Bağcılar' },
+  { id: 'T3', name: 'T3 Kadıköy - Moda'     },
 ];
 
 const FERRY_ROUTES = [
-  'Eminonu - Kadikoy',
-  'Besiktas - Kadikoy',
-  'Kabatas - Uskudar',
-  'Eminonu - Uskudar',
-  'Bosphorus Cruise',
-  'Princes Islands',
+  'Eminönü - Kadıköy',
+  'Beşiktaş - Kadıköy',
+  'Kabataş - Üsküdar',
+  'Eminönü - Üsküdar',
 ];
 
 function getBosphorusProximity(pos: LatLng): boolean {
-  // Rough Bosphorus corridor
   return pos.lng >= 28.95 && pos.lng <= 29.15 && pos.lat >= 40.9 && pos.lat <= 41.2;
+}
+
+/** Pick a deterministic "random" item from an array based on coordinates */
+function pick<T>(arr: T[], from: LatLng): T {
+  const idx = Math.abs(Math.round((from.lat + from.lng) * 1000)) % arr.length;
+  return arr[idx];
 }
 
 function detectAvailableTransit(from: LatLng, to: LatLng) {
@@ -93,101 +94,117 @@ function detectAvailableTransit(from: LatLng, to: LatLng) {
     (from.lng > 29.05 && to.lng < 29.0);
 
   return {
-    hasFerry: crossesBosphorus || (getBosphorusProximity(from) && getBosphorusProximity(to)),
-    hasMetro: dist > 1.5,
-    hasTram: dist < 15 && !crossesBosphorus,
+    hasFerry:     crossesBosphorus || (getBosphorusProximity(from) && getBosphorusProximity(to)),
+    hasMetro:     dist > 1.5,
+    hasTram:      dist < 15 && !crossesBosphorus,
     hasFunicular: dist < 3,
     crossesBosphorus,
   };
 }
 
 export function computeRouteOptions(from: LatLng, to: LatLng): RouteOption[] {
-  const dist = haversineKm(from, to);
+  const dist    = haversineKm(from, to);
   const transit = detectAvailableTransit(from, to);
 
   const makeOption = (mode: TransportMode): RouteOption => {
-    const speed = SPEED_KMH[mode];
-    const boarding = BOARDING_MIN[mode];
-    const travelMin = (dist / speed) * 60;
-    const totalMin = Math.round(travelMin + boarding);
+    const speed      = SPEED_KMH[mode];
+    const boarding   = BOARDING_MIN[mode];
+    const travelMin  = (dist / speed) * 60;
+    const totalMin   = Math.round(travelMin + boarding);
 
-    let steps: string[] = [];
-    let lines: string[] = [];
-    let available = true;
-    let reason = '';
+    let steps: string[]   = [];
+    let lines: string[]   = [];
+    let available         = true;
+    let reason            = '';
 
     switch (mode) {
       case 'walking':
-        available = dist <= 5;
-        reason = dist > 5 ? 'Too far to walk comfortably' : '';
+        // Walking is always shown — user decides if it's too far
+        available = true;
         steps = [
           `Head towards your destination (${dist.toFixed(1)} km)`,
-          'Follow pedestrian paths and crossings',
+          'Follow pedestrian paths, crossings, and footways',
           'Arrive at destination',
         ];
         break;
 
-      case 'metro':
+      case 'car':
+        available = true;
+        steps = [
+          'Start navigation in your preferred maps app',
+          `Drive towards destination (~${dist.toFixed(1)} km)`,
+          'Istanbul traffic: allow extra time during rush hours (07–10, 17–20)',
+          'Look for paid parking (otopark) near destination',
+        ];
+        break;
+
+      case 'metro': {
         available = transit.hasMetro;
-        reason = !transit.hasMetro ? 'Metro not practical for this short distance' : '';
-        lines = [METRO_LINES[Math.floor(Math.random() * METRO_LINES.length)].name];
+        reason    = !transit.hasMetro ? 'Metro not practical for this short distance' : '';
+        const line = transit.crossesBosphorus
+          ? METRO_LINES[METRO_LINES.length - 1]   // Marmaray
+          : pick(METRO_LINES.slice(0, -1), from);
+        lines = [line.name];
         steps = [
           'Walk to nearest metro station',
-          `Board ${lines[0]}`,
+          `Board ${line.name}`,
           'Ride to the closest station to your destination',
           'Walk to final destination',
         ];
-        if (transit.crossesBosphorus) {
-          lines = ['Marmaray (Bosphorus Tunnel)'];
-          steps[1] = 'Board Marmaray line (crosses under Bosphorus)';
-        }
         break;
+      }
 
-      case 'tram':
+      case 'tram': {
         available = transit.hasTram;
-        reason = !transit.hasTram ? 'No tram route available for this journey' : '';
-        lines = [TRAM_LINES[0].name];
+        reason    = !transit.hasTram ? 'No tram route available for this journey' : '';
+        const line = pick(TRAM_LINES, from);
+        lines = [line.name];
         steps = [
           'Walk to nearest tram stop',
-          `Board ${TRAM_LINES[0].name} tram`,
+          `Board ${line.name} tram`,
           'Exit at stop nearest to destination',
           'Short walk to destination',
         ];
         break;
+      }
 
-      case 'bus':
+      case 'bus': {
         available = true;
-        const busLine = `${Math.floor(Math.random() * 300) + 1}${['', 'A', 'B', 'C'][Math.floor(Math.random() * 4)]}`;
-        lines = [`IETT Bus ${busLine}`];
+        // Deterministic bus number from coordinates
+        const busNum = (Math.abs(Math.round((from.lat + from.lng) * 100)) % 300) + 1;
+        const suffix = ['', 'A', 'B', 'C'][Math.abs(Math.round(from.lat * 10)) % 4];
+        lines = [`IETT Bus ${busNum}${suffix}`];
         steps = [
-          'Find the nearest IETT bus stop (look for the orange signs)',
-          `Take Bus ${busLine} towards your direction`,
+          'Find the nearest IETT bus stop (orange signs)',
+          `Take Bus ${busNum}${suffix} towards your direction`,
           'Use Istanbulkart contactless card for payment',
           'Alight at the stop nearest to your destination',
           'Short walk to arrive',
         ];
         break;
+      }
 
-      case 'ferry':
+      case 'ferry': {
         available = transit.hasFerry;
-        reason = !transit.hasFerry ? 'No ferry route serves this crossing' : '';
-        const ferry = FERRY_ROUTES[Math.floor(Math.random() * 3)];
-        lines = [`IDO / Sehir Hatlari: ${ferry}`];
+        reason    = !transit.hasFerry ? 'No ferry route serves this crossing' : '';
+        const route = pick(FERRY_ROUTES, from);
+        lines = [`IDO / Şehir Hatları: ${route}`];
         steps = [
           'Walk to the nearest ferry terminal (iskele)',
-          'Purchase ticket or use Istanbulkart',
-          `Board the ${ferry} ferry service`,
-          'Enjoy the Bosphorus crossing (~15-20 min)',
+          'Purchase ticket or tap Istanbulkart',
+          `Board the ${route} ferry service`,
+          'Enjoy the Bosphorus crossing (~15–20 min)',
           'Walk or take connecting transport to destination',
         ];
         break;
+      }
 
       case 'funicular':
         available = transit.hasFunicular && dist < 2;
-        reason = !available ? 'Funicular only serves specific hillside routes (Kabatas-Taksim, Beyoglu)' : '';
-        lines = ['F1 Kabatas - Taksim'];
+        reason    = !available ? 'Funicular serves specific routes only (Kabataş–Taksim, Beyoğlu)' : '';
+        lines     = ['F1 Kabataş – Taksim'];
         steps = [
-          'Walk to Kabatas funicular entrance',
+          'Walk to Kabataş funicular entrance',
           'Board F1 funicular (2-min ride)',
           'Exit at Taksim Square',
           'Walk to final destination',
@@ -198,10 +215,9 @@ export function computeRouteOptions(from: LatLng, to: LatLng): RouteOption[] {
     return { mode, durationMin: totalMin, distanceKm: dist, steps, lines, available, reason };
   };
 
-  const modes: TransportMode[] = ['walking', 'metro', 'tram', 'bus', 'ferry', 'funicular'];
+  const modes: TransportMode[] = ['walking', 'car', 'metro', 'tram', 'bus', 'ferry', 'funicular'];
   const options = modes.map(makeOption);
 
-  // Sort: available first, then by duration
   return options.sort((a, b) => {
     if (a.available !== b.available) return a.available ? -1 : 1;
     return a.durationMin - b.durationMin;

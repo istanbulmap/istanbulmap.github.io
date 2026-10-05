@@ -45,7 +45,6 @@ function createEndpointIcon(label: string, color: string): L.DivIcon {
   });
 }
 
-// ── Visual style per mode ─────────────────────────────────────────────────────
 type RouteStyle = {
   color: string; weight: number; opacity: number;
   dashArray?: string; lineCap?: L.LineCapShape; lineJoin?: L.LineJoinShape;
@@ -60,10 +59,18 @@ const MODE_STYLE: Record<TransportMode, RouteStyle> = {
   funicular: { color: '#8b5cf6', weight: 3, opacity: 0.85, dashArray: '3 7',  lineCap: 'round',  lineJoin: 'round' },
 };
 
-// ── OSRM fetch helpers ────────────────────────────────────────────────────────
+// ── OSRM ─────────────────────────────────────────────────────────────────────
 
 interface OSRMRoute { geometry: { coordinates: [number, number][] } }
 interface OSRMResp  { code: string; routes: OSRMRoute[] }
+
+function isValidLatLng(p: LatLng): boolean {
+  return (
+    p != null &&
+    typeof p.lat === 'number' && isFinite(p.lat) &&
+    typeof p.lng === 'number' && isFinite(p.lng)
+  );
+}
 
 /**
  * Validate that a LatLng has finite, real-number coordinates before use.
@@ -87,7 +94,7 @@ function isValidLatLng(p: LatLng): boolean {
  */
 async function fetchOSRM(
   waypoints: LatLng[],
-  profile: 'foot' | 'driving' | 'bike',
+  profile: 'foot' | 'driving',
   signal: AbortSignal,
 ): Promise<L.LatLngExpression[] | null> {
   // Guard: drop invalid points, bail if we have fewer than 2 remaining
@@ -130,6 +137,7 @@ async function buildGeometry(
 
   switch (mode) {
 
+    // ── Pedestrian — strictly foot profile, no car roads ────────────────────
     case 'walking':
     case 'funicular': {
       // Strict foot-routed pedestrian path — never driving profile
@@ -137,18 +145,21 @@ async function buildGeometry(
       return pts ? [pts] : fallback;
     }
 
+    // ── Bus — driving via nearest hubs ───────────────────────────────────────
     case 'bus': {
       const hubs = buildTransitWaypoints(from, to, BUS_HUBS, 3).filter(isValidLatLng);
       const pts  = await fetchOSRM([from, ...hubs, to], 'driving', signal);
       return pts ? [pts] : fallback;
     }
 
+    // ── Tram ─────────────────────────────────────────────────────────────────
     case 'tram': {
       const stops = buildTransitWaypoints(from, to, TRAM_STOPS, 4).filter(isValidLatLng);
       const pts   = await fetchOSRM([from, ...stops, to], 'driving', signal);
       return pts ? [pts] : fallback;
     }
 
+    // ── Metro — walk to/from station, straight line underground ─────────────
     case 'metro': {
       const stations = buildTransitWaypoints(from, to, METRO_STATIONS, 4).filter(isValidLatLng);
       if (stations.length < 2) {
@@ -177,6 +188,7 @@ async function buildGeometry(
       return segments.length ? segments : fallback;
     }
 
+    // ── Ferry — walk to terminal, cross, walk to destination ─────────────────
     case 'ferry': {
       const fromTerminal = nearestPoint(from, FERRY_TERMINALS);
       const toTerminal   = nearestPoint(to,   FERRY_TERMINALS);
@@ -204,16 +216,16 @@ async function buildGeometry(
   }
 }
 
-// ── Request cancellation ──────────────────────────────────────────────────────
+// ── Abort controller ──────────────────────────────────────────────────────────
 let currentAbortController: AbortController | null = null;
 
 // ── MapView class ─────────────────────────────────────────────────────────────
 export class MapView {
-  private map:          L.Map | null = null;
-  private pinLayers:    Map<string, L.Marker> = new Map();
-  private routeLayer:   L.LayerGroup | null = null;
-  private fromMarker:   L.Marker | null = null;
-  private toMarker:     L.Marker | null = null;
+  private map:        L.Map | null = null;
+  private pinLayers:  Map<string, L.Marker> = new Map();
+  private routeLayer: L.LayerGroup | null = null;
+  private fromMarker: L.Marker | null = null;
+  private toMarker:   L.Marker | null = null;
 
   onFromDragEnd: ((pos: LatLng) => void) | null = null;
   onToDragEnd:   ((pos: LatLng) => void) | null = null;
@@ -248,6 +260,18 @@ export class MapView {
 
   getMap(): L.Map | null { return this.map; }
 
+  /**
+   * FIX: black-screen on mobile ↔ desktop switch.
+   * When the layout changes the map container resizes but Leaflet doesn't
+   * know about it. Calling invalidateSize() tells Leaflet to re-read the
+   * container dimensions and re-render all tiles.
+   */
+  invalidateSize() {
+    if (!this.map) return;
+    // Small delay lets the DOM finish re-laying out before we measure
+    setTimeout(() => { this.map?.invalidateSize({ animate: false }); }, 50);
+  }
+
   // ── Pins ────────────────────────────────────────────────────────────────────
   syncPins(
     pins: Pin[],
@@ -260,8 +284,8 @@ export class MapView {
       if (!currentIds.has(id)) { marker.remove(); this.pinLayers.delete(id); }
     });
     pins.forEach((pin) => {
-      const icon   = createPinIcon(pin.color, pin.isFavorite);
-      const latlng = [pin.position.lat, pin.position.lng] as L.LatLngExpression;
+      const icon    = createPinIcon(pin.color, pin.isFavorite);
+      const latlng  = [pin.position.lat, pin.position.lng] as L.LatLngExpression;
       const existing = this.pinLayers.get(pin.id);
       if (existing) {
         existing.setLatLng(latlng);
@@ -273,9 +297,9 @@ export class MapView {
           .addTo(this.map!);
         const stopProp = (e: L.LeafletEvent) =>
           L.DomEvent.stopPropagation(e as unknown as L.LeafletMouseEvent);
-        marker.on('click',   stopProp);
+        marker.on('click',    stopProp);
         marker.on('dblclick', stopProp);
-        marker.on('dragend', () => {
+        marker.on('dragend',  () => {
           const ll = marker.getLatLng();
           onPinUpdate(pin.id, { lat: ll.lat, lng: ll.lng });
         });
@@ -292,7 +316,7 @@ export class MapView {
     </div>`;
   }
 
-  // ── Route markers ────────────────────────────────────────────────────────────
+  // ── Route markers ─────────────────────────────────────────────────────────
   setRouteMarkers(from: LatLng | null, to: LatLng | null) {
     if (!this.map) return;
     if (this.fromMarker) { this.fromMarker.remove(); this.fromMarker = null; }
@@ -304,9 +328,9 @@ export class MapView {
       this.fromMarker = L.marker([from.lat, from.lng], {
         icon: createEndpointIcon('A', '#2dd4bf'), draggable: true, zIndexOffset: 1000,
       }).addTo(this.map);
-      this.fromMarker.on('click', stopProp);
+      this.fromMarker.on('click',    stopProp);
       this.fromMarker.on('dblclick', stopProp);
-      this.fromMarker.on('dragend', () => {
+      this.fromMarker.on('dragend',  () => {
         if (!this.fromMarker || !this.onFromDragEnd) return;
         const ll = this.fromMarker.getLatLng();
         this.onFromDragEnd({ lat: ll.lat, lng: ll.lng });
@@ -317,9 +341,9 @@ export class MapView {
       this.toMarker = L.marker([to.lat, to.lng], {
         icon: createEndpointIcon('B', '#f59e0b'), draggable: true, zIndexOffset: 1000,
       }).addTo(this.map);
-      this.toMarker.on('click', stopProp);
+      this.toMarker.on('click',    stopProp);
       this.toMarker.on('dblclick', stopProp);
-      this.toMarker.on('dragend', () => {
+      this.toMarker.on('dragend',  () => {
         if (!this.toMarker || !this.onToDragEnd) return;
         const ll = this.toMarker.getLatLng();
         this.onToDragEnd({ lat: ll.lat, lng: ll.lng });
@@ -327,9 +351,10 @@ export class MapView {
     }
   }
 
-  // ── Routing ──────────────────────────────────────────────────────────────────
+  // ── Route drawing ─────────────────────────────────────────────────────────
   async drawRouteReal(from: LatLng, to: LatLng, mode: TransportMode): Promise<void> {
     if (!this.map || !this.routeLayer) return;
+    if (!isValidLatLng(from) || !isValidLatLng(to)) return;
 
     // FIX: Guard against invalid coordinates — these cause the NaN LatLng error
     if (!isValidLatLng(from) || !isValidLatLng(to)) return;
@@ -339,7 +364,6 @@ export class MapView {
     const { signal } = currentAbortController;
 
     this.routeLayer.clearLayers();
-
     const style = MODE_STYLE[mode];
 
     try {
@@ -375,7 +399,7 @@ export class MapView {
           padding: [70, 70], maxZoom: 16, animate: true,
         });
       }
-    } catch (err) {
+    } catch {
       if (signal.aborted) return;
       if (!this.map || !this.routeLayer) return;
       const fallback = L.polyline([[from.lat, from.lng], [to.lat, to.lng]], {

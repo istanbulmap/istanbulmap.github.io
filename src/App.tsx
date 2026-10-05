@@ -74,6 +74,13 @@ export default function App() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
+  // FIX: black screen when switching between mobile and desktop layouts.
+  // The map container moves in the DOM when isMobile changes — Leaflet
+  // doesn't know the container resized, so it stays blank until we tell it.
+  useEffect(() => {
+    mapInstance.invalidateSize();
+  }, [isMobile, mapInstance]);
+
   // ── Init map ONCE ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (!mapContainerRef.current) return;
@@ -374,7 +381,7 @@ export default function App() {
 
           {mobileDrawerOpen && store.activePanel !== 'none' && (
             <div className="flex flex-col flex-shrink-0"
-                 style={{ height: '56vh', maxHeight: '56vh', background: '#0b0c10', borderTop: '1px solid rgba(233,228,218,0.12)' }}>
+                 style={{ height: store.activePanel === 'route' ? '48vh' : '52vh', maxHeight: '65vh', background: '#0b0c10', borderTop: '1px solid rgba(233,228,218,0.12)' }}>
               <div className="flex items-center justify-between px-4 py-3 flex-shrink-0"
                    style={{ borderBottom: '1px solid rgba(233,228,218,0.10)' }}>
                 <span className="text-sm font-semibold" style={{ color: '#e9e4da', fontFamily: "'Space Grotesk',sans-serif" }}>
