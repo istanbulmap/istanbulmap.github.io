@@ -12,6 +12,7 @@ import {
   IconZoomIn, IconZoomOut, IconLocate, IconX,
 } from './components/ui/Icons';
 import { ActivePanel, LatLng } from './types';
+import type { RouteInfo } from './utils/walkingRoute';
 
 interface NavItem {
   id: ActivePanel;
@@ -61,6 +62,9 @@ export default function App() {
   // activeEndpoint: which pin the next map-click places
   const [activeEndpoint, setActiveEndpoint] = useState<'A' | 'B' | null>('A');
 
+  // Status of the last route draw (engine used, real distance) shown in the route panel
+  const [routeInfo, setRouteInfo] = useState<RouteInfo | null>(null);
+
   // Mobile bottom-sheet state: 'hidden' | 'peek' | 'half' | 'full'
   type SheetState = 'hidden' | 'peek' | 'half' | 'full';
   const [sheetState, setSheetState] = useState<SheetState>('hidden');
@@ -104,6 +108,7 @@ export default function App() {
       isDraggingMarkerRef.current = false;
       setRouteToFn.current(pos);
     };
+    mapInstance.onRouteInfo = setRouteInfo;
 
     map.on('dragstart', () => { isDraggingMarkerRef.current = true; });
 
@@ -226,6 +231,7 @@ export default function App() {
     routeFromLabel: store.routeFromLabel, routeToLabel: store.routeToLabel,
     setRouteFromLabel: store.setRouteFromLabel, setRouteToLabel: store.setRouteToLabel,
     activeEndpoint, onSetActiveEndpoint: setActiveEndpoint,
+    routeInfo,
   };
 
   const renderPanelContent = (compact = false) => {

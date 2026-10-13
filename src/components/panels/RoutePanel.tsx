@@ -7,6 +7,7 @@ import {
   IconX, IconSave, IconChevronDown, IconClock, IconRoute, IconLocate,
 } from '../ui/Icons';
 import PlaceSearch from '../ui/PlaceSearch';
+import { RouteInfo, ENGINE_LABEL } from '../../utils/walkingRoute';
 
 // ── Car icon ──────────────────────────────────────────────────────────────────
 const IconCar = ({ size = 16 }: { size?: number }) => (
@@ -65,14 +66,17 @@ interface RoutePanelProps {
   activeEndpoint?:     'A' | 'B' | null;
   onSetActiveEndpoint?: (ep: 'A' | 'B' | null) => void;
   compact?: boolean;
+  /** Result of the last route draw: which engine answered + real distance */
+  routeInfo?: RouteInfo | null;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 const RoutePanelComponent: React.FC<RoutePanelProps> = ({
   state, actions,
   routeFromLabel, routeToLabel, setRouteFromLabel, setRouteToLabel,
-  activeEndpoint, onSetActiveEndpoint,
+  onSetActiveEndpoint,
   compact = false,
+  routeInfo = null,
 }) => {
   const { routeFrom, routeTo, routeMode } = state;
 
@@ -294,6 +298,51 @@ const RoutePanelComponent: React.FC<RoutePanelProps> = ({
     </div>
   );
 
+  // ── Real metrics (walking uses the actual routed path, not a straight line) ──
+  const metricsFor = (o: { mode: TransportMode; durationMin: number; distanceKm: number }) => {
+    if (o.mode === 'walking' && routeInfo?.mode === 'walking' && routeInfo.status === 'ok'
+        && routeInfo.distanceKm !== undefined && routeInfo.durationMin !== undefined) {
+      return { durationMin: routeInfo.durationMin, distanceKm: routeInfo.distanceKm };
+    }
+    return { durationMin: o.durationMin, distanceKm: o.distanceKm };
+  };
+
+  // ── Routing status line: tells the user which engine produced the path ──
+  const renderRouteStatus = () => {
+    if (!routeInfo || routeInfo.mode !== selectedMode) return null;
+    const base: React.CSSProperties = {
+      display: 'flex', alignItems: 'center', gap: '7px', padding: '7px 10px', borderRadius: '9px',
+      marginBottom: '8px', fontSize: '11px', lineHeight: 1.45, fontFamily: "'Space Grotesk', sans-serif",
+    };
+    if (routeInfo.status === 'loading') {
+      return (
+        <div style={{ ...base, background: 'rgba(233,228,218,0.05)', border: '1px solid rgba(233,228,218,0.1)', color: '#9a9d95' }}>
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#9a9d95', flexShrink: 0, opacity: 0.7 }} />
+          {selectedMode === 'walking' ? 'Finding the best walking path…' : 'Finding route…'}
+        </div>
+      );
+    }
+    if (routeInfo.status === 'failed') {
+      return (
+        <div style={{ ...base, background: 'rgba(244,63,94,0.07)', border: '1px solid rgba(244,63,94,0.28)', color: '#f43f5e' }}>
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#f43f5e', flexShrink: 0 }} />
+          {selectedMode === 'walking'
+            ? "Couldn't reach a pedestrian router. The grey line is only a straight line, not a walking path. Move a pin or switch mode to retry."
+            : "Couldn't load the road route. The grey line is a straight line."}
+        </div>
+      );
+    }
+    if (selectedMode === 'walking' && routeInfo.engine) {
+      return (
+        <div style={{ ...base, background: 'rgba(34,197,94,0.07)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e' }}>
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#22c55e', flexShrink: 0 }} />
+          Footpath route · {ENGINE_LABEL[routeInfo.engine]}
+        </div>
+      );
+    }
+    return null;
+  };
+
   // ── Mode pill strip (compact/mobile) ──────────────────────────────────────
   const renderModePills = () => {
     const available = routeOptions.filter((o) => o.available);
@@ -323,7 +372,7 @@ const RoutePanelComponent: React.FC<RoutePanelProps> = ({
             >
               <Icon size={15} />
               <span style={{ fontSize: '9px', fontFamily: "'JetBrains Mono',monospace", letterSpacing: '0.06em' }}>
-                {formatDuration(o.durationMin)}
+                {formatDuration(metricsFor(o).durationMin)}
               </span>
               <span style={{ fontSize: '8px', fontFamily: "'JetBrains Mono',monospace", opacity: 0.6 }}>
                 {cfg.label}
@@ -369,7 +418,8 @@ const RoutePanelComponent: React.FC<RoutePanelProps> = ({
 
   // ── Route card list ───────────────────────────────────────────────────────
   const renderRouteCards = () => (
-    <div style={{ flex: 1, overflowY: 'auto', padding: compact ? '0 12px 8px' : '10px 14px 0' }}>
+    <div style={{ flex: 1, overflowY: 'auto', padding: compact ? '8px 12px 8px' : '10px 14px 0' }}>
+      {renderRouteStatus()}
       {!compact && routeOptions.length > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
           <span style={monoSm}>{routeOptions.filter((r) => r.available).length} options</span>
@@ -437,10 +487,10 @@ const RoutePanelComponent: React.FC<RoutePanelProps> = ({
                   <div style={{ textAlign: 'right', flexShrink: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'flex-end', fontSize: '13px', fontWeight: 600, color: '#e9e4da', fontFamily: "'Space Grotesk',sans-serif" }}>
                       <IconClock size={11} />
-                      {formatDuration(option.durationMin)}
+                      {formatDuration(metricsFor(option).durationMin)}
                     </div>
                     <div style={{ fontSize: '10px', color: '#4a4f59', fontFamily: "'JetBrains Mono',monospace", marginTop: '2px' }}>
-                      {option.distanceKm.toFixed(1)} km
+                      {metricsFor(option).distanceKm.toFixed(1)} km
                     </div>
                   </div>
                 )}
