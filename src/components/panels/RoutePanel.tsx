@@ -418,8 +418,7 @@ const RoutePanelComponent: React.FC<RoutePanelProps> = ({
 
   // ── Route card list ───────────────────────────────────────────────────────
   const renderRouteCards = () => (
-    <div style={{ flex: 1, overflowY: 'auto', padding: compact ? '8px 12px 8px' : '10px 14px 0' }}>
-      {renderRouteStatus()}
+    <div style={{ flex: 1, overflowY: 'auto', padding: compact ? '0 12px 8px' : '10px 14px 0' }}>
       {!compact && routeOptions.length > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
           <span style={monoSm}>{routeOptions.filter((r) => r.available).length} options</span>
@@ -615,6 +614,27 @@ const RoutePanelComponent: React.FC<RoutePanelProps> = ({
     );
   };
 
+  // ── Pinned status strip (always visible, never scrolls away) ──
+  const renderPinnedStatus = () => {
+    if (routeOptions.length === 0) return null;
+    const node = renderRouteStatus();
+    if (!node) return null;
+    return (
+      <div style={{ flexShrink: 0, padding: compact ? '8px 12px 0' : '10px 14px 0' }}>{node}</div>
+    );
+  };
+
+  // ── Build stamp: proves which deployed version this browser is running ──
+  const renderBuildStamp = () => (
+    <div style={{
+      flexShrink: 0, padding: '5px 14px', textAlign: 'center', fontSize: '9px',
+      letterSpacing: '0.04em', color: '#3a3f47', fontFamily: "'JetBrains Mono',monospace",
+      borderTop: '1px solid rgba(233,228,218,0.05)',
+    }}>
+      build {__BUILD_ID__}
+    </div>
+  );
+
   // ── Compact layout (mobile) ───────────────────────────────────────────────
   if (compact) {
     return (
@@ -627,8 +647,10 @@ const RoutePanelComponent: React.FC<RoutePanelProps> = ({
             {renderModePills()}
           </div>
         )}
+        {renderPinnedStatus()}
         {routeOptions.length === 0 ? renderEmpty() : renderRouteCards()}
         {renderSaved()}
+        {renderBuildStamp()}
       </div>
     );
   }
@@ -639,8 +661,10 @@ const RoutePanelComponent: React.FC<RoutePanelProps> = ({
       <div style={{ borderBottom: '1px solid rgba(233,228,218,0.08)', flexShrink: 0 }}>
         {renderInputs()}
       </div>
+      {renderPinnedStatus()}
       {routeOptions.length === 0 ? renderEmpty() : renderRouteCards()}
       {renderSaved()}
+      {renderBuildStamp()}
     </div>
   );
 };
