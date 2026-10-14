@@ -5,7 +5,7 @@ import {
   METRO_STATIONS, TRAM_STOPS, BUS_HUBS, FERRY_TERMINALS,
   nearestPoint, buildTransitWaypoints,
 } from '../../utils/transitWaypoints';
-import { fetchWalkingRoute, walkMinutes, RouteInfo, WalkEngine } from '../../utils/walkingRoute';
+import { fetchWalkingRoute, routeWalking, walkMinutes, RouteInfo, WalkEngine } from '../../utils/walkingRoute';
 
 delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -101,6 +101,8 @@ interface Built {
   segments: L.LatLngExpression[][];
   /** true when the main road/path geometry could not be fetched (a straight line is shown) */
   failed: boolean;
+  /** the routers answered, but the only way is across water - nothing to draw */
+  noRoute?: 'water';
   walk?: { engine: WalkEngine; distanceKm: number };
 }
 
@@ -112,10 +114,12 @@ async function buildGeometry(
   switch (mode) {
     case 'walking':
     case 'funicular': {
-      const r = await fetchWalkingRoute(from, to, signal);
-      return r
-        ? { segments: [r.points], failed: false, walk: { engine: r.engine, distanceKm: r.distanceKm } }
-        : { segments: fb, failed: true };
+      const o = await routeWalking(from, to, signal);
+      if (o.kind === 'ok') {
+        return { segments: [o.result.points], failed: false, walk: { engine: o.result.engine, distanceKm: o.result.distanceKm } };
+      }
+      if (o.kind === 'water') return { segments: [], failed: false, noRoute: 'water' };
+      return { segments: fb, failed: true };
     }
     case 'car': {
       const pts = await fetchDriving([from, to], signal);
@@ -297,8 +301,11 @@ export class MapView {
 
       if (bounds.length > 1)
         this.map.fitBounds(L.latLngBounds(bounds as L.LatLngExpression[]), { padding: [60, 60], maxZoom: 17, animate: true });
+      else if (built.noRoute)   // nothing drawn: just frame both pins
+        this.map.fitBounds(L.latLngBounds([[from.lat, from.lng], [to.lat, to.lng]]), { padding: [60, 60], maxZoom: 15, animate: true });
 
-      if (built.failed) this.onRouteInfo?.({ mode, status: 'failed' });
+      if (built.noRoute) this.onRouteInfo?.({ mode, status: 'no-route' });
+      else if (built.failed) this.onRouteInfo?.({ mode, status: 'failed' });
       else if (built.walk) this.onRouteInfo?.({
         mode, status: 'ok', engine: built.walk.engine,
         distanceKm: built.walk.distanceKm, durationMin: walkMinutes(built.walk.distanceKm),

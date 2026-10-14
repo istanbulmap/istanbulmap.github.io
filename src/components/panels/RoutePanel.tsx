@@ -82,7 +82,8 @@ const RoutePanelComponent: React.FC<RoutePanelProps> = ({
 
   const [saveName,       setSaveName]       = useState('');
   const [showSave,       setShowSave]       = useState(false);
-  const [selectedMode,   setSelectedMode]   = useState<TransportMode>(routeMode);
+  // The store is the single source of truth for the chosen mode.
+  const selectedMode: TransportMode = routeMode;
   const [expandedRoute,  setExpandedRoute]  = useState<TransportMode | null>(null);
   const [locLoading,     setLocLoading]     = useState(false);
   const [locError,       setLocError]       = useState(false);
@@ -92,16 +93,29 @@ const RoutePanelComponent: React.FC<RoutePanelProps> = ({
     return computeRouteOptions(routeFrom, routeTo);
   }, [routeFrom, routeTo]);
 
-  // Auto-select fastest available mode when endpoints change
+  // Moving a pin never changes the mode you picked. The only exception: if that mode
+  // becomes impossible for the new A/B (e.g. Metro for a 300 m trip) we fall back to
+  // Walk - which is always possible - and tell you.
   useEffect(() => {
     if (routeOptions.length === 0) return;
-    const fastest = routeOptions.find((o) => o.available);
-    if (fastest && fastest.mode !== selectedMode) {
-      setSelectedMode(fastest.mode);
-      actions.setRouteMode(fastest.mode);
+    const cur = routeOptions.find((o) => o.mode === routeMode);
+    if (cur && !cur.available) {
+      actions.setRouteMode('walking');
+      actions.notify(`${TC[routeMode].label} isn't available for this trip. Switched to Walk.`, 'info');
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [routeFrom, routeTo]);
+  }, [routeOptions, routeMode]);
+
+  // Remember "no walking route here (water)" so the Walk card keeps saying so after
+  // you switch to another mode and back.
+  const pairKey = routeFrom && routeTo ? `${routeFrom.lat},${routeFrom.lng}|${routeTo.lat},${routeTo.lng}` : '';
+  const [walkBlockedKey, setWalkBlockedKey] = useState('');
+  useEffect(() => {
+    if (routeInfo?.mode !== 'walking') return;
+    if (routeInfo.status === 'no-route') setWalkBlockedKey(pairKey);
+    else if (routeInfo.status === 'ok') setWalkBlockedKey('');
+  }, [routeInfo, pairKey]);
+  const walkBlocked = walkBlockedKey !== '' && walkBlockedKey === pairKey;
 
   // ── "Use my location" ─────────────────────────────────────────────────────
   const handleUseMyLocation = useCallback(() => {
@@ -307,6 +321,12 @@ const RoutePanelComponent: React.FC<RoutePanelProps> = ({
     return { durationMin: o.durationMin, distanceKm: o.distanceKm };
   };
 
+  const blocked = (o: { mode: TransportMode }) => o.mode === 'walking' && walkBlocked;
+  const timeLabel = (o: { mode: TransportMode; durationMin: number; distanceKm: number }) =>
+    blocked(o) ? 'No route' : formatDuration(metricsFor(o).durationMin);
+  const distLabel = (o: { mode: TransportMode; durationMin: number; distanceKm: number }) =>
+    blocked(o) ? 'water in between' : `${metricsFor(o).distanceKm.toFixed(1)} km`;
+
   // ── Routing status line: tells the user which engine produced the path ──
   const renderRouteStatus = () => {
     if (!routeInfo || routeInfo.mode !== selectedMode) return null;
@@ -319,6 +339,14 @@ const RoutePanelComponent: React.FC<RoutePanelProps> = ({
         <div style={{ ...base, background: 'rgba(233,228,218,0.05)', border: '1px solid rgba(233,228,218,0.1)', color: '#9a9d95' }}>
           <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#9a9d95', flexShrink: 0, opacity: 0.7 }} />
           {selectedMode === 'walking' ? 'Finding the best walking path…' : 'Finding route…'}
+        </div>
+      );
+    }
+    if (routeInfo.status === 'no-route') {
+      return (
+        <div style={{ ...base, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.32)', color: '#f59e0b' }}>
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#f59e0b', flexShrink: 0 }} />
+          No walking route between these points: it would need a ferry or a water crossing. Try Ferry, Metro or Car.
         </div>
       );
     }
@@ -359,7 +387,7 @@ const RoutePanelComponent: React.FC<RoutePanelProps> = ({
           return (
             <button
               key={o.mode}
-              onClick={() => { setSelectedMode(o.mode); actions.setRouteMode(o.mode); }}
+              onClick={() => { actions.setRouteMode(o.mode); }}
               style={{
                 display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '3px',
                 padding: '7px 10px', borderRadius: '12px', cursor: 'pointer',
@@ -372,7 +400,7 @@ const RoutePanelComponent: React.FC<RoutePanelProps> = ({
             >
               <Icon size={15} />
               <span style={{ fontSize: '9px', fontFamily: "'JetBrains Mono',monospace", letterSpacing: '0.06em' }}>
-                {formatDuration(metricsFor(o).durationMin)}
+                {timeLabel(o)}
               </span>
               <span style={{ fontSize: '8px', fontFamily: "'JetBrains Mono',monospace", opacity: 0.6 }}>
                 {cfg.label}
@@ -453,7 +481,6 @@ const RoutePanelComponent: React.FC<RoutePanelProps> = ({
                 style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: compact ? '9px 11px' : '11px 12px' }}
                 onClick={() => {
                   if (!option.available) return;
-                  setSelectedMode(option.mode);
                   actions.setRouteMode(option.mode);
                   setExpandedRoute(isExp ? null : option.mode);
                 }}
@@ -486,10 +513,10 @@ const RoutePanelComponent: React.FC<RoutePanelProps> = ({
                   <div style={{ textAlign: 'right', flexShrink: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'flex-end', fontSize: '13px', fontWeight: 600, color: '#e9e4da', fontFamily: "'Space Grotesk',sans-serif" }}>
                       <IconClock size={11} />
-                      {formatDuration(metricsFor(option).durationMin)}
+                      {timeLabel(option)}
                     </div>
                     <div style={{ fontSize: '10px', color: '#4a4f59', fontFamily: "'JetBrains Mono',monospace", marginTop: '2px' }}>
-                      {metricsFor(option).distanceKm.toFixed(1)} km
+                      {distLabel(option)}
                     </div>
                   </div>
                 )}
