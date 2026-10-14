@@ -85,7 +85,7 @@ export function useAppStore(): AppState & AppActions {
   const [routeTo, setRouteTo] = useState<LatLng | null>(null);
   const [routeFromLabel, setRouteFromLabel] = useState<string>('');
   const [routeToLabel, setRouteToLabel] = useState<string>('');
-  const [routeMode, setRouteMode] = useState<TransportMode>('metro');
+  const [routeMode, setRouteMode] = useState<TransportMode>('walking');
   const [mapCenter, setMapCenter] = useState<LatLng>(ISTANBUL_CENTER);
   const [mapZoom, setMapZoom] = useState<number>(13);
   const [searchQuery, setSearchQuery] = useState('');
