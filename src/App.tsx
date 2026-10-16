@@ -65,6 +65,25 @@ export default function App() {
   // Status of the last route draw (engine used, real distance) shown in the route panel
   const [routeInfo, setRouteInfo] = useState<RouteInfo | null>(null);
 
+  // Real height of the mobile tab bar. It is taller on phones with a home-indicator
+  // inset (iPhone), so nothing below is positioned from a hard-coded number.
+  const navRef = useRef<HTMLElement>(null);
+  const [navH, setNavH] = useState(60);
+  useLayoutEffect(() => {
+    if (!isMobile) return;
+    const el = navRef.current;
+    if (!el) return;
+    const measure = () => setNavH(Math.round(el.getBoundingClientRect().height) || 60);
+    measure();
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(measure);
+      ro.observe(el);
+      return () => ro.disconnect();
+    }
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [isMobile]);
+
   // Mobile bottom-sheet state: 'hidden' | 'peek' | 'half' | 'full'
   type SheetState = 'hidden' | 'peek' | 'half' | 'full';
   const [sheetState, setSheetState] = useState<SheetState>('hidden');
@@ -163,7 +182,7 @@ export default function App() {
   // so Leaflet measures the correct container size on the same frame.
   useLayoutEffect(() => {
     mapInstance.invalidateSize();
-  }, [isMobile, mapInstance]);
+  }, [isMobile, navH, mapInstance]);
 
   // ── Sync pins ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -249,8 +268,8 @@ export default function App() {
   const SHEET_H: Record<SheetState, string> = {
     hidden: '0px',
     peek:   '200px',   // just inputs visible, map takes most of screen
-    half:   '48vh',
-    full:   '85vh',
+    half:   '48%',
+    full:   '85%',
   };
 
   return (
@@ -263,7 +282,15 @@ export default function App() {
           position: 'absolute', inset: 0,
           // On desktop, leave room for the sidebar (64px nav + optional 320px panel)
           left: isMobile ? 0 : (store.activePanel !== 'none' ? 384 : 64),
+          // On mobile the map ends where the tab bar starts (keeps the attribution visible)
+          bottom: isMobile ? navH : 0,
           transition: 'left 0.25s ease',
+          // KEY FIX: Leaflet's internal layers use z-index 200-1000. Without their own
+          // stacking context they outrank every button in the app (z-index 100-200),
+          // so the map painted on top of the nav bar, sheet and controls on mobile.
+          // z-index 0 + isolation keeps all of that contained inside the map.
+          zIndex: 0,
+          isolation: 'isolate',
         }}
       />
 
@@ -373,16 +400,16 @@ export default function App() {
           {/* Map overlays */}
           <ZoomControls map={mapInstance} />
           <Notification notification={store.notification} />
-          <MapHints activePanel={store.activePanel} routeFrom={store.routeFrom} routeTo={store.routeTo} activeEndpoint={activeEndpoint} isMobile sheetState={sheetState} />
+          <MapHints activePanel={store.activePanel} routeFrom={store.routeFrom} routeTo={store.routeTo} activeEndpoint={activeEndpoint} isMobile sheetState={sheetState} navH={navH} />
 
           {/* ── Bottom sheet ─────────────────────────────────────────────────
               Overlays the map. Does NOT affect map container size, so
               Leaflet stays fully rendered behind it at all times.
           ─────────────────────────────────────────────────────────────────── */}
           <div style={{
-            position: 'absolute', left: 0, right: 0, bottom: 52, // above tab bar
+            position: 'absolute', left: 0, right: 0, bottom: navH, // sits on the tab bar
             height: sheetState === 'hidden' ? 0 : SHEET_H[sheetState],
-            maxHeight: '85vh',
+            maxHeight: `calc(100% - ${navH + 64}px)`, // always leaves the title bar visible
             background: '#0b0c10',
             borderTop: '2px solid rgba(233,228,218,0.10)',
             borderRadius: '20px 20px 0 0',
@@ -452,7 +479,7 @@ export default function App() {
           </div>
 
           {/* ── Bottom tab bar ──────────────────────────────────────────────── */}
-          <nav style={{
+          <nav ref={navRef} style={{
             position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 200,
             background: '#0b0c10', borderTop: '1px solid rgba(233,228,218,0.10)',
             display: 'flex', alignItems: 'center', justifyContent: 'space-around',
@@ -487,9 +514,10 @@ interface MapHintsProps {
   activeEndpoint: 'A' | 'B' | null;
   isMobile:       boolean;
   sheetState?:    string;
+  navH?:          number;
 }
 
-function MapHints({ activePanel, routeFrom, routeTo, activeEndpoint, isMobile, sheetState }: MapHintsProps) {
+function MapHints({ activePanel, routeFrom, routeTo, activeEndpoint, isMobile, sheetState, navH = 60 }: MapHintsProps) {
   // On mobile, hide hint when sheet is full (map is mostly hidden anyway)
   if (isMobile && sheetState === 'full') return null;
 
@@ -505,9 +533,11 @@ function MapHints({ activePanel, routeFrom, routeTo, activeEndpoint, isMobile, s
   }
 
   // On mobile, position hint just above the bottom sheet
-  const bottomOffset = isMobile
-    ? (sheetState === 'hidden' ? '66px' : sheetState === 'peek' ? '218px' : '50vh')
-    : '24px';
+  const bottomOffset = !isMobile
+    ? '24px'
+    : sheetState === 'hidden' ? `${navH + 12}px`
+    : sheetState === 'peek'   ? `${navH + 200 + 12}px`
+    : `calc(${navH}px + 48% + 12px)`; // half-height sheet
 
   return (
     <div style={{
