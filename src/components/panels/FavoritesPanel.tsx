@@ -1,10 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { FavoriteLocation, LocationCategory, LatLng } from '../../types';
 import { AppActions, AppState } from '../../hooks/useAppStore';
 import {
   IconStar, IconTrash, IconArrowRight, IconChevronDown, IconChevronRight, IconPlus, IconX, IconCheck,
   CATEGORY_ICONS,
 } from '../ui/Icons';
+import { PlaceSuggestion, suggestionsFor } from '../../data/istanbulPlaces';
+import { resolvePlacePosition } from '../../utils/placeResolver';
 
 const CATEGORIES: { id: LocationCategory; label: string }[] = [
   { id: 'restaurant', label: 'Restaurant' },
@@ -16,36 +18,7 @@ const CATEGORIES: { id: LocationCategory; label: string }[] = [
   { id: 'other',      label: 'Other'      },
 ];
 
-const LANDMARKS: { name: string; position: LatLng; category: LocationCategory }[] = [
-  { name: 'Hagia Sophia',          position: { lat: 41.0086, lng: 28.9802 }, category: 'attraction' },
-  { name: 'Topkapi Palace',        position: { lat: 41.0115, lng: 28.9833 }, category: 'attraction' },
-  { name: 'Grand Bazaar',          position: { lat: 41.0108, lng: 28.9682 }, category: 'shopping'   },
-  { name: 'Spice Bazaar',          position: { lat: 41.0166, lng: 28.9702 }, category: 'shopping'   },
-  { name: 'Bosphorus Bridge',      position: { lat: 41.0463, lng: 29.0338 }, category: 'attraction' },
-  { name: 'Galata Tower',          position: { lat: 41.0257, lng: 28.9741 }, category: 'attraction' },
-  { name: 'Taksim Square',         position: { lat: 41.0369, lng: 28.9850 }, category: 'attraction' },
-  { name: 'Dolmabahce Palace',     position: { lat: 41.0393, lng: 29.0005 }, category: 'attraction' },
-  { name: 'Kadikoy Market',        position: { lat: 40.9906, lng: 29.0266 }, category: 'shopping'   },
-  { name: 'Suleymaniye Mosque',    position: { lat: 41.0161, lng: 28.9639 }, category: 'attraction' },
-  { name: 'Istanbul Airport',      position: { lat: 41.2753, lng: 28.7519 }, category: 'transport'  },
-  { name: 'Sabiha Gokcen Airport', position: { lat: 40.8982, lng: 29.3093 }, category: 'transport'  },
-  // Restaurants
-  { name: 'Nusr-Et Steakhouse Etiler', position: { lat: 41.0746, lng: 29.0322 }, category: 'restaurant' },
-  { name: 'Mikla Restaurant',          position: { lat: 41.0317, lng: 28.9778 }, category: 'restaurant' },
-  { name: 'Çiya Sofrası (Kadıköy)',    position: { lat: 40.9892, lng: 29.0260 }, category: 'restaurant' },
-  { name: 'Karaköy Güllüoğlu',        position: { lat: 41.0223, lng: 28.9737 }, category: 'restaurant' },
-  { name: 'Hamdi Restaurant',          position: { lat: 41.0172, lng: 28.9714 }, category: 'restaurant' },
-  // Cafes
-  { name: 'Mandabatmaz (Taksim)',      position: { lat: 41.0342, lng: 28.9789 }, category: 'cafe' },
-  { name: 'Walter\'s Coffee Roastery', position: { lat: 41.0432, lng: 29.0088 }, category: 'cafe' },
-  { name: 'Kronotrop Coffee Bar',      position: { lat: 41.0317, lng: 28.9820 }, category: 'cafe' },
-  { name: 'Fazıl Bey (Kadıköy)',       position: { lat: 40.9903, lng: 29.0281 }, category: 'cafe' },
-  // Hotels
-  { name: 'Four Seasons Sultanahmet',  position: { lat: 41.0072, lng: 28.9784 }, category: 'hotel' },
-  { name: 'Çırağan Palace Kempinski', position: { lat: 41.0455, lng: 29.0017 }, category: 'hotel' },
-  { name: 'Raffles Istanbul',          position: { lat: 41.0453, lng: 29.0116 }, category: 'hotel' },
-  { name: 'The Marmara Taksim',        position: { lat: 41.0369, lng: 28.9850 }, category: 'hotel' },
-];
+const PAGE_SIZE = 10;
 
 const border = '1px solid rgba(233,228,218,0.10)';
 const labelStyle: React.CSSProperties = {
@@ -67,10 +40,41 @@ interface FavoritesPanelProps {
 
 const FavoritesPanelComponent: React.FC<FavoritesPanelProps> = ({ state, actions, mapCenter }) => {
   const [activeCategory, setActiveCategory] = useState<LocationCategory | 'all'>('all');
-  const [showLandmarks, setShowLandmarks]   = useState(false);
+  const [showLandmarks, setShowLandmarks]   = useState(true);
   const [showAddForm, setShowAddForm]       = useState(false);
   const [addName, setAddName]               = useState('');
   const [addCategory, setAddCategory]       = useState<LocationCategory>('restaurant');
+  const [query, setQuery]                   = useState('');
+  const [visible, setVisible]               = useState(PAGE_SIZE);
+  const [adding, setAdding]                 = useState<string | null>(null);
+
+  // Start from the first page whenever the category or the search changes
+  useEffect(() => { setVisible(PAGE_SIZE); }, [activeCategory, query]);
+
+  const addedNames = useMemo(
+    () => new Set(state.data.favoriteLocations.map((f) => f.name)),
+    [state.data.favoriteLocations],
+  );
+
+  // Not-yet-added places first, already-added ones sink to the bottom
+  const suggestions = useMemo(() => {
+    const list  = suggestionsFor(activeCategory, query);
+    const fresh = list.filter((p) => !addedNames.has(p.name));
+    const done  = list.filter((p) =>  addedNames.has(p.name));
+    return { list: [...fresh, ...done], fresh: fresh.length };
+  }, [activeCategory, query, addedNames]);
+
+  // Add a suggestion. The saved position is refined through the geocoder when possible.
+  const handleAddSuggestion = async (place: PlaceSuggestion) => {
+    if (adding !== null || addedNames.has(place.name)) return;
+    setAdding(place.name);
+    try {
+      const position = await resolvePlacePosition(place);
+      actions.addFavorite(place.name, position, place.category, '');
+    } finally {
+      setAdding(null);
+    }
+  };
 
   const favorites = state.data.favoriteLocations.filter(
     (f) => activeCategory === 'all' || f.category === activeCategory
@@ -120,10 +124,14 @@ const FavoritesPanelComponent: React.FC<FavoritesPanelProps> = ({ state, actions
           {tabBtn(activeCategory === 'all', () => setActiveCategory('all'), 'All')}
           {CATEGORIES.map((cat) => {
             const CatIcon = CATEGORY_ICONS[cat.id];
-            return tabBtn(
-              activeCategory === cat.id,
-              () => setActiveCategory(cat.id),
-              <><CatIcon size={11} /> {cat.label}</>
+            return (
+              <React.Fragment key={cat.id}>
+                {tabBtn(
+                  activeCategory === cat.id,
+                  () => setActiveCategory(cat.id),
+                  <><CatIcon size={11} /> {cat.label}</>
+                )}
+              </React.Fragment>
             );
           })}
         </div>
@@ -191,7 +199,7 @@ const FavoritesPanelComponent: React.FC<FavoritesPanelProps> = ({ state, actions
           )}
         </div>
 
-        {/* Quick-add landmarks */}
+        {/* Discover Istanbul: curated suggestions for every category */}
         <div className="p-3" style={{ borderBottom: '1px solid rgba(233,228,218,0.06)' }}>
           <button onClick={() => setShowLandmarks(!showLandmarks)}
             className="flex items-center gap-2 transition-colors w-full"
@@ -199,40 +207,72 @@ const FavoritesPanelComponent: React.FC<FavoritesPanelProps> = ({ state, actions
             onMouseEnter={(e) => (e.currentTarget.style.color = '#e9e4da')}
             onMouseLeave={(e) => (e.currentTarget.style.color = '#6d727b')}>
             {showLandmarks ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
-            Quick-add Istanbul Places
+            <span style={{ flex: 1, textAlign: 'left' }}>Discover Istanbul</span>
+            <span style={{ color: '#2dd4bf' }}>{suggestions.fresh} to add</span>
           </button>
 
           {showLandmarks && (
-            <div className="mt-2 space-y-0.5">
-              {/* Filter landmarks by active category if one is selected */}
-              {LANDMARKS
-                .filter((lm) => activeCategory === 'all' || lm.category === activeCategory)
-                .map((lm) => {
-                  const alreadyAdded = state.data.favoriteLocations.some((f) => f.name === lm.name);
+            <div className="mt-2">
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search by name or district..."
+                style={inputStyle}
+              />
+              <div style={{ ...labelStyle, letterSpacing: '0.05em', margin: '8px 2px 4px' }}>
+                {suggestions.list.length === 0
+                  ? 'No matches'
+                  : visible < suggestions.list.length
+                    ? `Showing ${visible} of ${suggestions.list.length}`
+                    : `${suggestions.list.length} places`}
+              </div>
+
+              <div className="space-y-0.5">
+                {suggestions.list.slice(0, visible).map((lm) => {
+                  const alreadyAdded = addedNames.has(lm.name);
+                  const isAdding = adding === lm.name;
                   const CatIcon = CATEGORY_ICONS[lm.category];
                   return (
                     <button key={lm.name}
-                      onClick={() => !alreadyAdded && actions.addFavorite(lm.name, lm.position, lm.category, '')}
-                      disabled={alreadyAdded}
+                      onClick={() => handleAddSuggestion(lm)}
+                      disabled={alreadyAdded || adding !== null}
                       className="flex items-center gap-2 text-left px-2 py-1.5 rounded-lg w-full transition-colors"
                       style={{
                         color:  alreadyAdded ? '#2b3038' : '#9a9d95',
-                        cursor: alreadyAdded ? 'default' : 'pointer',
+                        cursor: alreadyAdded ? 'default' : (adding !== null ? 'wait' : 'pointer'),
                         fontSize: '12px', fontFamily: "'Space Grotesk',sans-serif",
                       }}
-                      onMouseEnter={(e) => { if (!alreadyAdded) e.currentTarget.style.background = 'rgba(233,228,218,0.04)'; }}
+                      onMouseEnter={(e) => { if (!alreadyAdded && adding === null) e.currentTarget.style.background = 'rgba(233,228,218,0.04)'; }}
                       onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
                       <CatIcon size={13} style={{ flexShrink: 0, color: '#6d727b' }} />
-                      <span style={{ flex: 1 }}>{lm.name}</span>
+                      <span style={{ flex: 1, minWidth: 0 }}>
+                        <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{lm.name}</span>
+                        <span style={{ display: 'block', fontSize: '10px', color: '#4a4f59', fontFamily: "'JetBrains Mono',monospace", marginTop: '1px' }}>{lm.area}</span>
+                      </span>
                       {alreadyAdded
                         ? <span style={{ fontSize: '10px', color: '#2dd4bf', fontFamily: "'JetBrains Mono',monospace" }}>Added</span>
-                        : <IconPlus size={12} style={{ color: '#6d727b', flexShrink: 0 }} />}
+                        : isAdding
+                          ? <span style={{ fontSize: '10px', color: '#6d727b', fontFamily: "'JetBrains Mono',monospace" }}>Adding...</span>
+                          : <IconPlus size={12} style={{ color: '#6d727b', flexShrink: 0 }} />}
                     </button>
                   );
                 })}
-              {LANDMARKS.filter((lm) => activeCategory === 'all' || lm.category === activeCategory).length === 0 && (
-                <p style={{ fontSize: '11px', color: '#2b3038', fontFamily: "'JetBrains Mono',monospace", padding: '8px 8px' }}>
-                  No preset {categoryLabel} locations — use Save current map location above.
+              </div>
+
+              {visible < suggestions.list.length && (
+                <button onClick={() => setVisible((v) => v + PAGE_SIZE)}
+                  className="w-full mt-2 py-2 rounded-lg text-xs transition-colors"
+                  style={{ border: '1px dashed rgba(233,228,218,0.15)', color: '#6d727b', fontFamily: "'Space Grotesk',sans-serif" }}
+                  onMouseEnter={(e) => (e.currentTarget.style.color = '#e9e4da')}
+                  onMouseLeave={(e) => (e.currentTarget.style.color = '#6d727b')}>
+                  Show {Math.min(PAGE_SIZE, suggestions.list.length - visible)} more &middot; {suggestions.list.length - visible} left
+                </button>
+              )}
+
+              {suggestions.list.length === 0 && (
+                <p style={{ fontSize: '11px', color: '#4a4f59', fontFamily: "'JetBrains Mono',monospace", padding: '6px 8px' }}>
+                  Nothing matches &ldquo;{query}&rdquo;. Try a district such as Kadıköy or Beşiktaş.
                 </p>
               )}
             </div>
@@ -250,7 +290,7 @@ const FavoritesPanelComponent: React.FC<FavoritesPanelProps> = ({ state, actions
               No {categoryLabel} saved yet.
               {activeCategory !== 'all' && (
                 <><br /><span style={{ fontSize: '11px', color: '#2b3038' }}>
-                  Use &ldquo;Save current map location&rdquo; above or add from Quick-add list.
+                  Use &ldquo;Save current map location&rdquo; above or add from Discover Istanbul.
                 </span></>
               )}
             </p>
